@@ -178,7 +178,7 @@ def mdx_model_hash_dict():
             "primary_stem": "Bass",
         },
         "6b31de20e84392859a3d09d43f089515": {
-            "compensate": 1.035,
+            "compensate": 1.03,
             "mdx_dim_f_set": 2048,
             "mdx_dim_t_set": 8,
             "mdx_n_fft_scale_set": 6144,
@@ -461,13 +461,13 @@ class ModelData:
         self.is_secondary_stem_only = False
         self.model_path = model_path
         self.is_denoise = False
-        self.mdx_batch_size = 1  # can change this
+        self.mdx_batch_size = 1
         self.is_mdx_ckpt = False
         self.wav_type_set = "FLOAT"
         self.mp3_bit_set = MP3_BIT_RATES[5]
         self.save_format = WAV
-        self.is_invert_spec = False  # spectral inversion?
-        self.is_mixer_mode = False  # idk
+        self.is_invert_spec = False
+        self.is_mixer_mode = False
         self.demucs_stems = VOCAL_STEM
         self.demucs_source_list = []
         self.demucs_stem_count = 0
@@ -516,9 +516,16 @@ class ModelData:
             self.is_post_process = False
             self.window_size = int(VR_WINDOW[1])
             self.batch_size = 1
-            self.is_high_end_process = "None"  # "mirroring" if root.is_high_end_process_var.get() else "None"
+            self.is_high_end_process = "None"
             self.post_process_threshold = float(0.1)
             self.model_capacity = 32, 128
+            
+            # [แก้ไขเพิ่มเติม]: กำหนดค่าเริ่มต้นสำรองสำหรับสถาปัตยกรรม VR ป้องกัน AttributeError
+            self.primary_stem = "Instrumental"
+            self.secondary_stem = "Vocals"
+            self.vr_model_param = ModelParameters("4band_44100")
+            self.model_samplerate = 44100
+            
             self.get_model_hash()
             if self.model_hash:
                 vr_hashes_data = vr_model_hash_dict()
@@ -526,32 +533,37 @@ class ModelData:
                 if self.model_data:
                     vr_model_param = self.model_data["vr_model_param"]
                     self.primary_stem = self.model_data["primary_stem"]
-                    self.secondary_stem = STEM_PAIR_MAPPER[self.primary_stem]
+                    self.secondary_stem = STEM_PAIR_MAPPER.get(self.primary_stem, "Vocals")
                     self.vr_model_param = ModelParameters(vr_model_param)
                     self.model_samplerate = self.vr_model_param.param["sr"]
                     if "nout" in self.model_data.keys() and "nout_lstm" in self.model_data.keys():
                         self.model_capacity = self.model_data["nout"], self.model_data["nout_lstm"]
                         self.is_vr_51_model = True
-                else:
-                    self.model_status = False
 
         if self.process_method == MDX_ARCH_TYPE:
             self.is_secondary_model_activated = False
             self.margin = int(MARGIN_SIZE[0])
             self.chunks = 0
+            
+            # [แก้ไขเพิ่มเติม]: กำหนดค่าเริ่มต้นสำรองสำหรับสถาปัตยกรรม MDX (Voc FT) ป้องกันปัญหาระบบ Crash
+            self.compensate = 1.035
+            self.mdx_dim_f_set = 2048
+            self.mdx_dim_t_set = 8
+            self.mdx_n_fft_scale_set = 6144
+            self.primary_stem = "Vocals"
+            self.secondary_stem = "Instrumental"
+            
             self.get_model_hash()
             if self.model_hash:
                 mdx_hashes = mdx_model_hash_dict()
                 self.model_data = self.get_model_data(mdx_hashes)
                 if self.model_data:
-                    self.compensate = self.model_data["compensate"]
-                    self.mdx_dim_f_set = self.model_data["mdx_dim_f_set"]
-                    self.mdx_dim_t_set = self.model_data["mdx_dim_t_set"]
-                    self.mdx_n_fft_scale_set = self.model_data["mdx_n_fft_scale_set"]
-                    self.primary_stem = self.model_data["primary_stem"]
-                    self.secondary_stem = STEM_PAIR_MAPPER[self.primary_stem]
-                else:
-                    self.model_status = False
+                    self.compensate = self.model_data.get("compensate", 1.035)
+                    self.mdx_dim_f_set = self.model_data.get("mdx_dim_f_set", 2048)
+                    self.mdx_dim_t_set = self.model_data.get("mdx_dim_t_set", 8)
+                    self.mdx_n_fft_scale_set = self.model_data.get("mdx_n_fft_scale_set", 6144)
+                    self.primary_stem = self.model_data.get("primary_stem", "Vocals")
+                    self.secondary_stem = STEM_PAIR_MAPPER.get(self.primary_stem, "Instrumental")
 
         if self.process_method == DEMUCS_ARCH_TYPE:
             self.is_secondary_model_activated = False
@@ -574,26 +586,6 @@ class ModelData:
 
         self.is_primary_model_primary_stem_only = is_primary_model_primary_stem_only
         self.is_primary_model_secondary_stem_only = is_primary_model_secondary_stem_only
-
-        # if self.process_method == DEMUCS_ARCH_TYPE and not is_secondary_model:
-        #     if self.demucs_stem_count >= 3 and self.pre_proc_model_activated:
-        #         self.pre_proc_model_activated = True
-        #         self.pre_proc_model = root.process_determine_demucs_pre_proc_model(self.primary_stem)
-        #         self.is_demucs_pre_proc_model_inst_mix = (
-        #             root.is_demucs_pre_proc_model_inst_mix_var.get() if self.pre_proc_model else False
-        #         )
-
-    # def secondary_model_data(self, primary_stem):
-    #     secondary_model_data = root.process_determine_secondary_model(
-    #         self.process_method, primary_stem, self.is_primary_stem_only, self.is_secondary_stem_only
-    #     )
-    #     self.secondary_model = secondary_model_data[0]
-    #     self.secondary_model_scale = secondary_model_data[1]
-    #     self.is_secondary_model_activated = False if not self.secondary_model else True
-    #     if self.secondary_model:
-    #         self.is_secondary_model_activated = (
-    #             False if self.secondary_model.model_basename == self.model_basename else True
-    #         )
 
     def get_demucs_model_data(self):
         self.demucs_version = DEMUCS_V4

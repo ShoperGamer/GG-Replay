@@ -1,5 +1,4 @@
 import os
-
 import ffmpeg
 import numpy as np
 
@@ -29,13 +28,38 @@ def find_pth_and_index_files(directory):
     pth_files = []
     index_files = []
 
-    for root, _, files in os.walk(directory):
-        for filename in files:
-            lower_filename = filename.lower()
-            if lower_filename.endswith(".pth"):
-                pth_files.append(os.path.join(root, filename))
-            if lower_filename.endswith(".index"):
-                index_files.append(os.path.join(root, filename))
+    # 1. [แก้ไขเพิ่มเติม]: หากเส้นทางที่ส่งมาเป็น "ไฟล์ .pth โดยตรง" ไม่ใช่โฟลเดอร์ ให้ดึงไฟล์นั้นมาใช้งานทันที
+    if os.path.isfile(directory) and directory.lower().endswith(".pth"):
+        pth_files.append(directory)
+        # ทำการค้นหาไฟล์ .index คู่กันที่อยู่ในโฟลเดอร์ระดับเดียวกัน
+        parent_dir = os.path.dirname(directory)
+        if os.path.exists(parent_dir):
+            for filename in os.listdir(parent_dir):
+                if filename.lower().endswith(".index"):
+                    index_files.append(os.path.join(parent_dir, filename))
+        return pth_files, index_files
+
+    # 2. หากเป็นโฟลเดอร์โครงสร้าง ให้ค้นหาภายในตามปกติ
+    if os.path.isdir(directory):
+        for root, _, files in os.walk(directory):
+            for filename in files:
+                lower_filename = filename.lower()
+                if lower_filename.endswith(".pth"):
+                    pth_files.append(os.path.join(root, filename))
+                if lower_filename.endswith(".index"):
+                    index_files.append(os.path.join(root, filename))
+        if pth_files:
+            return pth_files, index_files
+
+    # 3. [เซฟตี้เพิ่มเติม]: กรณีเป็นชื่อโมเดลแต่ไฟล์จริงอยู่ในโฟลเดอร์แม่ (Parent Directory)
+    parent_dir = os.path.dirname(directory)
+    if os.path.exists(parent_dir):
+        for filename in os.listdir(parent_dir):
+            full_p = os.path.join(parent_dir, filename)
+            if os.path.isfile(full_p) and filename.lower().endswith(".pth") and (directory.lower() in full_p.lower() or full_p.lower() == directory.lower()):
+                pth_files.append(full_p)
+            if filename.lower().endswith(".index"):
+                index_files.append(os.path.join(parent_dir, filename))
 
     if len(pth_files) == 0:
         raise RuntimeError(f"No .pth files found in {directory}")

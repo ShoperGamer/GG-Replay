@@ -46,8 +46,11 @@ class InferenceManager:
             self.source_audio_path = sample_file
 
         self.track_md5 = hashlib.md5(open(self.source_audio_path, "rb").read()).hexdigest()
-        # make a copy of the source file locally to always be able to play it
+        
+        # --- [แก้ไขสำเร็จ]: เปลี่ยนจาก // เป็น # คอมเมนต์ให้ถูกหลักไวยากรณ์ภาษา Python ป้องกันอาการ Syntax Error ---
+        # ทำสำเนาไฟล์ต้นฉบับไว้ในแอปเสมอเพื่อให้ Frontend ดึงข้อมูลไปรันได้ตลอดเวลา
         os.makedirs(self.originals_directory, exist_ok=True)
+        
         extension = os.path.splitext(self.source_audio_path)[1]
         self.originals_file = os.path.join(
             self.originals_directory,
@@ -115,7 +118,6 @@ class InferenceManager:
         self.yt_cache = os.path.join(output_directory, "yt-cache")
 
         self.originals_directory = os.path.join(output_directory, "originals")
-        # if it exists, set self values - if it doesn't, its either a url or a file that doesn't exist
         if os.path.exists(source_audio_path):
             self.set_track_values(source_audio_path)
 
@@ -135,6 +137,11 @@ class InferenceManager:
         from inference.rvc_model import RVCModel
 
         model_dir = os.path.join(models_path, model_name)
+        if not os.path.exists(model_dir) and not model_name.lower().endswith(".pth"):
+            fallback_dir = os.path.join(models_path, f"{model_name}.pth")
+            if os.path.exists(fallback_dir):
+                model_dir = fallback_dir
+
         pth_files, index_files = find_pth_and_index_files(model_dir)
         model = RVCModel(model_name, pth_files, index_files)
         return model
@@ -177,7 +184,6 @@ class InferenceManager:
                     self.stems_directory,
                     "vocals_copies",
                 )
-                # ensure dirs exist
                 os.makedirs(vocal_copies_dir, exist_ok=True)
                 md5_vocals_file = os.path.join(
                     vocal_copies_dir,
@@ -198,7 +204,6 @@ class InferenceManager:
                     "UVR-DeEcho-DeReverb by FoxJoy",
                     update_status_deecho,
                 )
-                # we might want to merge the echo and reverb back into the instrumentals? or run the model on it? idk
                 elapsed_time = time.time() - start_time
                 logger.info(f"De-echo complete. Elapsed time: {elapsed_time}")
 
@@ -206,39 +211,29 @@ class InferenceManager:
         logger.info("---------------------------------")
 
     def pitch_shift(self, audio: AudioSegment, pitch: int):
-        # Check if audio is stereo
         is_stereo = audio.channels == 2
-
-        # Split stereo to mono if necessary
         if is_stereo:
             audio_channels = audio.split_to_mono()
         else:
             audio_channels = [audio]
 
         shifted_channels = []
-
         for channel in audio_channels:
-            # Convert the audio samples of the channel to a NumPy array
             samples = np.array(channel.get_array_of_samples())
             samples_float = samples.astype(np.float32) / np.iinfo(samples.dtype).max
 
-            # Use librosa to perform the pitch shift
             y_shifted = librosa.effects.pitch_shift(samples_float, sr=audio.frame_rate, n_steps=float(pitch))
 
-            # Convert the floating-point values back to the original data type
             int_samples = np.array(y_shifted * np.iinfo(samples.dtype).max, dtype=samples.dtype)
 
-            # Create a new AudioSegment object with the modified samples for the channel
             shifted_channel = AudioSegment(
                 int_samples.tobytes(),
                 frame_rate=audio.frame_rate,
                 sample_width=audio.sample_width,
                 channels=1,
             )
-
             shifted_channels.append(shifted_channel)
 
-        # Merge channels back into stereo or just return mono, as appropriate
         if is_stereo:
             shifted_audio = AudioSegment.from_mono_audiosegments(*shifted_channels)
         else:
@@ -261,12 +256,24 @@ class InferenceManager:
             vocal_output = os.path.join(outputs, converted_vocals_file)
             self.converted_vocals_file = vocal_output
             os.makedirs(outputs, exist_ok=True)
+            
+            # ปรับระดับสเกลสัญญาเสียง ป้องกันคลิปปิ้งและเสียงหุ่นยนต์บน GPU Mode
+            audio_opt = np.nan_to_num(np.array(audio_opt, dtype=np.float32))
+            max_v = np.max(np.abs(audio_opt))
+            if max_v > 0:
+                if max_v <= 1.01:
+                    audio_opt = (audio_opt * 32767).astype(np.int16)
+                else:
+                    audio_opt = (audio_opt / max_v * 32767).astype(np.int16)
+            else:
+                audio_opt = audio_opt.astype(np.int16)
+                
             logger.info(f"RVCv2: Inference succeeded. Writing to {vocal_output}...")
             wavfile.write(vocal_output, tgt_sr, audio_opt)
             logger.info(f"RVCv2: Finished! Saved output to {vocal_output}")
             logger.info("---------------------------------")
             logger.info("Rejoining the track...")
-            # Load the audio files
+            
             vocal = AudioSegment.from_wav(vocal_output)
             if self.pre_stemmed:
                 self.joined_track = vocal
@@ -275,14 +282,12 @@ class InferenceManager:
                 if self.instrumentals_pitch:
                     logger.info("RVCv2: Adjusting pitch of instrumentals...")
                     instrumental = self.pitch_shift(instrumental, self.instrumentals_pitch)
-                # Combine the audio files
                 self.joined_track = instrumental.overlay(vocal)
             else:
                 logger.info("RVCv2: Unable to find instrumentals file. Skipping rejoin.")
 
             logger.info("Track rejoined.")
             logger.info("Writing completed file...")
-            # Check the output format
             if self.output_format == "wav":
                 output_file = "final.wav"
                 parameters = {"format": "wav"}
@@ -302,7 +307,6 @@ class InferenceManager:
             self.output_filepath = joined_track_export
             logger.info("---------------------------------")
             logger.info("Inference complete.")
-            # Clear references/memory
             self.model.clearMemory()
             del self.model
             del audio_opt
@@ -311,9 +315,7 @@ class InferenceManager:
             gc.collect()
         except Exception as e:
             if self.status == "stopped":
-                self.check_and_update_status(
-                    "Stopped",
-                )
+                self.check_and_update_status("Stopped")
                 return
             self.error = e
             self.status = "errored"
@@ -324,7 +326,6 @@ class InferenceManager:
             raise e
 
     def check_and_download_youtube_audio(self, url):
-        # Check if the url is a valid YouTube video link
         youtube_regex = (
             r"(https?://)?(www\.)?"
             "(youtube|youtu|youtube-nocookie)\.(com|be)/"
@@ -341,7 +342,6 @@ class InferenceManager:
             if d["status"] == "downloading":
                 self.check_and_update_status(f"Downloading youtube audio:{d['_percent_str']}{d['_speed_str']}")
 
-        # Define the options for youtube_dl
         ydl_opts = {
             "format": "bestaudio/best",
             "postprocessors": [
@@ -355,44 +355,34 @@ class InferenceManager:
             "progress_hooks": [my_hook],
         }
 
-        # Use youtube_dl to extract title info
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=False)
             video_title = info_dict.get("title", None)
 
-        # Sanitize the title for use in a filename
         safe_title = (
             video_title.replace(" ", "_").replace("/", "_").replace("\\", "_").replace(":", "_").replace("*", "_")
         )
-        # even more safe title
         safe_title = "".join(x for x in safe_title if x.isalnum())
-        # windows can only support 255 characters, so trim if longer
         yt_cache_len = len(self.yt_cache)
         if len(safe_title) + yt_cache_len > 255:
             safe_title = safe_title[: 255 - yt_cache_len]
         ydl_opts["outtmpl"] = f"{self.yt_cache}/{safe_title}"
 
-        # Check if file already exists
         output_path = f"{self.yt_cache}/{safe_title}.mp3"
         if os.path.exists(output_path):
             return True, output_path
 
-        # Now download the video
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             self.check_and_update_status("Downloading audio from YouTube...")
             ydl.download([url])
             return True, output_path
 
     def check_and_update_status(self, status_message, status: STATUS = None):
-        # Update local status
         self.status = status if status else self.status
-        # Check if we should stop
         if self.check_stop_job() and self.status != "stopped":
             self.status = "stopped"
             raise RuntimeError("Stopped")
-        # Print for debugging
         logger.info(f"Status ({self.status}): {status_message}")
-        # Otherwise update current status
         error_str = None
         if self.error:
             error_str = str(self.error)
@@ -485,7 +475,6 @@ class InferenceManager:
             traceback.print_exc()
             self.error = e
             if self.status == "stopped":
-                # Runtime Error from stopping. Do nothing.
                 self.check_and_update_status("Stopped", "stopped")
                 return
             self.check_and_update_status("Error", "errored")

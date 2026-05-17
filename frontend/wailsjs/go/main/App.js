@@ -6,16 +6,68 @@ export function CreateSong(arg1, arg2, arg3) {
   return window['go']['main']['App']['CreateSong'](arg1, arg2, arg3);
 }
 
+export function DeleteLocalFile(arg1, arg2) {
+  return window['go']['main']['App']['DeleteLocalFile'](arg1, arg2);
+}
+
 export function DeleteModel(arg1) {
   return window['go']['main']['App']['DeleteModel'](arg1);
+}
+
+export function DownloadFile(arg1, arg2) {
+  return window['go']['main']['App']['DownloadFile'](arg1, arg2);
+}
+
+export function GetAICoverFiles() {
+  return window['go']['main']['App']['GetAICoverFiles']();
+}
+
+export function GetAudioUrl(arg1, arg2) {
+  return window['go']['main']['App']['GetAudioUrl'](arg1, arg2);
+}
+
+export function GetAudioUrlByFullPath(arg1) {
+  return window['go']['main']['App']['GetAudioUrlByFullPath'](arg1);
+}
+
+export function GetDefaultOptions() {
+  return window['go']['main']['App']['GetDefaultOptions']();
+}
+
+export function GetDeviceSetting() {
+  return window['go']['main']['App']['GetDeviceSetting']();
+}
+
+export function GetFileStreamUrl(arg1, arg2) {
+  return window['go']['main']['App']['GetFileStreamUrl'](arg1, arg2);
 }
 
 export function GetJobProgress(arg1) {
   return window['go']['main']['App']['GetJobProgress'](arg1);
 }
 
+export function GetOriginalFiles() {
+  return window['go']['main']['App']['GetOriginalFiles']();
+}
+
+export function GetSeparatedFiles() {
+  return window['go']['main']['App']['GetSeparatedFiles']();
+}
+
 export function GetStoredModels() {
   return window['go']['main']['App']['GetStoredModels']();
+}
+
+export function MergeAudio(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['MergeAudio'](arg1, arg2, arg3, arg4);
+}
+
+export function SaveDeviceSetting(arg1) {
+  return window['go']['main']['App']['SaveDeviceSetting'](arg1);
+}
+
+export function SaveFileAs(arg1, arg2) {
+  return window['go']['main']['App']['SaveFileAs'](arg1, arg2);
 }
 
 export function SelectAndSaveAudio() {

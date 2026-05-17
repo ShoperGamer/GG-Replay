@@ -3,10 +3,10 @@ from __future__ import annotations
 import logging
 import math
 import os
+import time
 import traceback
 import warnings
 
-# from lib_v5.vr_network.model_param_init import ModelParameters
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -86,13 +86,13 @@ class SeparateAttributes:
         self.is_gpu_conversion = model_data.is_gpu_conversion
         self.is_normalization = model_data.is_normalization
         self.is_ensemble_mode = model_data.is_ensemble_mode
-        self.secondary_model = model_data.secondary_model  #
+        self.secondary_model = model_data.secondary_model  
         self.primary_model_primary_stem = model_data.primary_model_primary_stem
-        self.primary_stem = model_data.primary_stem  #
-        self.secondary_stem = model_data.secondary_stem  #
-        self.is_invert_spec = model_data.is_invert_spec  #
-        self.is_mixer_mode = model_data.is_mixer_mode  #
-        self.secondary_model_scale = model_data.secondary_model_scale  #
+        self.primary_stem = model_data.primary_stem  
+        self.secondary_stem = model_data.secondary_stem  
+        self.is_invert_spec = model_data.is_invert_spec  
+        self.is_mixer_mode = model_data.is_mixer_mode  
+        self.secondary_model_scale = model_data.secondary_model_scale  
         self.primary_source_map = {}
         self.primary_source = None
         self.secondary_source = None
@@ -170,6 +170,11 @@ class SeparateAttributes:
             self.set_progress_bar(0.1, (0.8 / length * self.progress_value))
 
     def write_audio(self, stem_path, stem_source, samplerate):
+        # [แก้ไขเพิ่มเติม]: ตรวจสอบมิติข้อมูลอาร์เรย์เสียงก่อนบันทึก ป้องกันข้อมูลบิดเบี้ยวหรือขนาดแชนเนลเกินมาตรฐาน WAV
+        if isinstance(stem_source, np.ndarray):
+            if stem_source.ndim == 2 and stem_source.shape[0] == 2 and stem_source.shape[1] > 2:
+                stem_source = stem_source.T
+                
         sf.write(stem_path, stem_source, samplerate, subtype=self.wav_type_set)
         save_format(stem_path, self.save_format, self.mp3_bit_set) if not self.is_ensemble_mode else None
         self.set_progress_bar(0.95)
@@ -526,7 +531,7 @@ class SeparateVR(SeparateAttributes):
     def separate(self):
         device = torch.device(config.device)
 
-        nn_arch_sizes = [31191, 33966, 56817, 123821, 123812, 129605, 218409, 537238, 537227]  # default
+        nn_arch_sizes = [31191, 33966, 56817, 123821, 123812, 129605, 218409, 537238, 537227]  
         vr_5_1_models = [56817, 218409]
         model_size = math.ceil(os.stat(self.model_path).st_size / 1024)
         nn_arch_size = min(nn_arch_sizes, key=lambda x: abs(x - model_size))
@@ -590,7 +595,7 @@ class SeparateVR(SeparateAttributes):
             else:
                 wav_resolution = bp["res_type"]
 
-            if d == bands_n:  # high-end band
+            if d == bands_n:  
                 X_wave[d], _ = librosa.load(self.audio_file, bp["sr"], False, dtype=np.float32, res_type=wav_resolution)
 
                 if not np.any(X_wave[d]) and self.audio_file.endswith(".mp3"):
@@ -598,7 +603,7 @@ class SeparateVR(SeparateAttributes):
 
                 if X_wave[d].ndim == 1:
                     X_wave[d] = np.asarray([X_wave[d], X_wave[d]])
-            else:  # lower bands
+            else:  
                 X_wave[d] = librosa.resample(
                     X_wave[d + 1], self.mp.param["band"][d + 1]["sr"], bp["sr"], res_type=wav_resolution
                 )
@@ -774,15 +779,29 @@ def rerun_mp3(audio_file, sample_rate=44100):
 
 
 def save_format(audio_path, output_format, mp3_bit_set):
-    file = pydub.AudioSegment.from_wav(audio_path)
+    # --- [แก้ไขเพิ่มเติม]: เพิ่มฟังก์ชันวนลูปตรวจสอบและป้องกัน Windows Lock Latency ---
+    for _ in range(15):
+        if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
+            break
+        time.sleep(0.4)
 
-    if output_format == FLAC:
-        audio_path_flac = audio_path.replace(".wav", ".flac")
-        file.export(audio_path_flac, format="flac")
+    if not os.path.exists(audio_path):
+        print(f"Warning: Audio file {audio_path} is missing or locked by OS. Skipping format export.")
+        return
 
-    if output_format == MP3:
-        audio_path_mp3 = audio_path.replace(".wav", ".mp3")
-        file.export(audio_path_mp3, format="mp3", bitrate=mp3_bit_set)
-    # we want to always write a preview mp3 file for the user
-    audio_path_mp3 = audio_path.replace(".wav", "_preview.mp3")
-    file.export(audio_path_mp3, format="mp3", bitrate="192k")
+    try:
+        file = pydub.AudioSegment.from_wav(audio_path)
+
+        if output_format == FLAC:
+            audio_path_flac = audio_path.replace(".wav", ".flac")
+            file.export(audio_path_flac, format="flac")
+
+        if output_format == MP3:
+            audio_path_mp3 = audio_path.replace(".wav", ".mp3")
+            file.export(audio_path_mp3, format="mp3", bitrate=mp3_bit_set)
+            
+        # สร้างไฟล์พรีวิวเสียงสำหรับเครื่องเล่นใน Frontend เสมอ
+        audio_path_preview = audio_path.replace(".wav", "_preview.mp3")
+        file.export(audio_path_preview, format="mp3", bitrate="192k")
+    except Exception as convert_err:
+        print(f"Error during save_format audio conversion for {audio_path}: {convert_err}")

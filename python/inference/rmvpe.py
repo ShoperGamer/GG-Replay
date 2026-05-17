@@ -322,6 +322,55 @@ class RMVPE:
 
             model = E2E(4, 1, (2, 2))
             model_path = os.path.join(weights_path, "rmvpe.pt")
+
+            # --- [แก้ไขเพิ่มเติม]: ระบบตรวจสอบและสตรีมดาวน์โหลด rmvpe.pt อัตโนมัติ ป้องกัน FileNotFoundError ---
+            if not os.path.exists(model_path):
+                os.makedirs(weights_path, exist_ok=True)
+                print("Foundational RVC pitch model component 'rmvpe.pt' is missing.")
+                print("Downloading 'rmvpe.pt' automatically from secure mirrors... Please wait.")
+                
+                try:
+                    import requests
+                    # รายการลิงก์ดาวน์โหลดสากลประสิทธิภาพสูงของกลุ่มนักพัฒนา RVC
+                    urls = [
+                        "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/rmvpe.pt",
+                        "https://huggingface.co/sc94/RVC_Models/resolve/main/rmvpe.pt",
+                        "https://github.com/7777777MiKa/RVC-Weights/releases/download/v2/rmvpe.pt"
+                    ]
+                    
+                    downloaded = False
+                    for url in urls:
+                        print(f"Connecting to mirror: {url}")
+                        try:
+                            response = requests.get(url, stream=True, timeout=30)
+                            if response.status_code == 200:
+                                with open(model_path, "wb") as f:
+                                    for chunk in response.iter_content(chunk_size=8192):
+                                        if chunk:
+                                            f.write(chunk)
+                                print("Successfully downloaded 'rmvpe.pt' into data/models folder!")
+                                downloaded = True
+                                break
+                            else:
+                                print(f"Mirror responded with HTTP status code: {response.status_code}")
+                        except Exception as mirror_err:
+                            print(f"Skipping unresponsive mirror: {mirror_err}")
+                            
+                    if not downloaded:
+                        raise RuntimeError("All RMVPE model download mirrors failed to respond.")
+                        
+                except Exception as err:
+                    # ป้องกันไฟล์เสียตกค้าง
+                    if os.path.exists(model_path):
+                        try: os.remove(model_path)
+                        except: pass
+                    raise RuntimeError(
+                        f"Failed to auto-download 'rmvpe.pt': {err}. "
+                        f"Please download it manually from HuggingFace (lj1995/VoiceConversionWebUI/resolve/main/rmvpe.pt) "
+                        f"and drop it directly inside your local folder: '{weights_path}'"
+                    )
+            # -------------------------------------------------------------------------------------------
+
             ckpt = torch.load(model_path, map_location=config.device)
             model.load_state_dict(ckpt)
             model.eval()

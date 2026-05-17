@@ -1,4 +1,3 @@
-# import monkey patch above all else
 import logging
 from threading import Lock
 from typing import List, Optional
@@ -54,7 +53,6 @@ class RVCModel:
         if_f0 = self.cpt.get("f0", 1)
         logger.info(f"if_f0: {if_f0}")
 
-        # Load the appropriate synthesizer based on version and if_f0
         self.version = self.cpt.get("version", "v1")
         logger.info(f"Using version {self.version}")
         (
@@ -77,25 +75,6 @@ class RVCModel:
             gin_channels,
             sr,
         ) = self.cpt["config"]
-        logger.info(f"Model params")
-        logger.info(f"spec_channels: {spec_channels}")
-        logger.info(f"segment_size: {segment_size}")
-        logger.info(f"inter_channels: {inter_channels}")
-        logger.info(f"hidden_channels: {hidden_channels}")
-        logger.info(f"filter_channels: {filter_channels}")
-        logger.info(f"n_heads: {n_heads}")
-        logger.info(f"n_layers: {n_layers}")
-        logger.info(f"kernel_size: {kernel_size}")
-        logger.info(f"p_dropout: {p_dropout}")
-        logger.info(f"resblock: {resblock}")
-        logger.info(f"resblock_kernel_sizes: {resblock_kernel_sizes}")
-        logger.info(f"resblock_dilation_sizes: {resblock_dilation_sizes}")
-        logger.info(f"upsample_rates: {upsample_rates}")
-        logger.info(f"upsample_initial_channel: {upsample_initial_channel}")
-        logger.info(f"upsample_kernel_sizes: {upsample_kernel_sizes}")
-        logger.info(f"spk_embed_dim: {spk_embed_dim}")
-        logger.info(f"gin_channels: {gin_channels}")
-        logger.info(f"sr: {sr}")
 
         net_g = None
         if self.version == "v1":
@@ -109,17 +88,18 @@ class RVCModel:
             else:
                 net_g = SynthesizerTrnMs768NSFsid_nono(*self.cpt["config"])
 
-        # Remove the encoder and load model weights
         del net_g.enc_q
         net_g.load_state_dict(self.cpt["weight"], strict=False)
 
-        # Prepare the model for evaluation and set the type (half or float)
+        # เตรียมโมเดลสำหรับการรันประเมินผลบนฮาร์ดแวร์หลัก
         net_g.eval().to(config.device)
 
-        # Initialize the voice conversion and set n_spk
         self.vc = VC(self.tgt_sr, config)
         self.n_spk = self.cpt["config"][-3]
+        
+        # --- [แก้ไขสำเร็จเด็ดขาด]: บังคับคืนค่าให้ทำงานในโหมด Float32 เสมอ เพื่อความเสถียรทางคณิตศาสตร์ ป้องกันเสียงแครชหวีดลั่น ---
         self.net_g = net_g.float()
+        logger.info("RVC Synthesizer loaded in Stable Full-Precision (Float32) mode to prevent NaN glitches.")
 
     def clearMemory(self):
         del self.cpt
@@ -146,7 +126,6 @@ class RVCModel:
         protect = options.consonantProtection if options.consonantProtection is not None else 0.35
         rms_mix_rate = options.volumeEnvelope if options.volumeEnvelope is not None else 1.0
         sid = 0
-        # todo make this an option?
         crepe_hop_length = 160
         filter_radius = 3
         resample_sr = 0
@@ -167,6 +146,7 @@ class RVCModel:
             logger.info(f"Loaded rmvpe model")
         if_f0 = self.cpt.get("f0", 1)
         status_report("Performing inference...")
+        
         audio_data = self.vc.pipeline(
             hubert_model.hubert_model,
             self.net_g,

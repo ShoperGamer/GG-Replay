@@ -3,13 +3,14 @@ import HomePage from './pages/HomePage';
 import DemucsPage from './pages/DemucsPage';
 import DownloadPage from './pages/DownloadPage';
 import SharePage from './pages/SharePage';
+import Summary from './pages/Summary';
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState('home');
 
   return (
     <div className="flex h-screen w-full bg-[#0b0d11] text-slate-200">
-      {/* Sidebar */}
+      {/* แถบเมนูด้านซ้าย (Sidebar) */}
       <aside className="w-64 border-r border-white/5 flex flex-col p-6 glass-card z-20">
         <div className="flex items-center gap-3 mb-10 px-2">
           <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg shadow-lg shadow-indigo-500/30"></div>
@@ -41,6 +42,12 @@ const App: React.FC = () => {
             label="History & Share" 
             icon={<><path d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" /></>} 
           />
+          <MenuBtn 
+            active={activeTab === 'summary'} 
+            onClick={() => setActiveTab('summary')}
+            label="Summary & Mix" 
+            icon={<><path d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" /></>} 
+          />
         </nav>
         
         <div className="mt-auto pt-6 border-t border-white/5 text-[10px] text-slate-600 text-center uppercase tracking-widest">
@@ -48,19 +55,28 @@ const App: React.FC = () => {
         </div>
       </aside>
 
-      {/* Content Area */}
+      {/* พื้นที่แสดงเนื้อหาเพจ (Content Area) */}
       <main className="flex-1 overflow-y-auto p-10 relative">
         <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-indigo-600/10 blur-[150px] rounded-full -z-10 animate-pulse"></div>
         {activeTab === 'home' && <HomePage />}
         {activeTab === 'demucs' && <DemucsPage />}
         {activeTab === 'download' && <DownloadPage />}
         {activeTab === 'share' && <SharePage />}
+        {activeTab === 'summary' && <Summary />}
       </main>
     </div>
   );
 };
 
-const MenuBtn = ({ active, onClick, label, icon }: any) => (
+// คอมโพเนนต์ปุ่มเมนูลิสต์ Sidebar
+interface MenuBtnProps {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  icon: React.ReactNode;
+}
+
+const MenuBtn: React.FC<MenuBtnProps> = ({ active, onClick, label, icon }) => (
   <button 
     onClick={onClick}
     className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl transition-all duration-300 ${

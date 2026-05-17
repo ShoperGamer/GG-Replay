@@ -24,4 +24,5 @@ torchaudio==2.0.2
 torchcrepe==0.0.21
 uvicorn==0.23.2
 yt-dlp==2023.7.6
+onnxruntime==1.16.3
 pyrubberband==0.3.0; sys_platform == 'win32'

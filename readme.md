@@ -133,6 +133,9 @@ source venv/bin/activate
 
 # ติดตั้งไลบรารีทั้งหมด
 pip install -r requirements.txt
+
+# รันงานผ่าน GPU (Nvidia)
+.\venv\Scripts\pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118 --force-reinstall
 ```
 
 ### ขั้นตอนที่ 2: ติดตั้ง Frontend Dependencies

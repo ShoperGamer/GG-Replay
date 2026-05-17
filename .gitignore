@@ -158,3 +158,9 @@ scripts/temp
 python/done
 python/*.bin
 python/*.html
+
+# --- เพิ่มเติม: บล็อก Python Virtual Environment ไร้สาระและไฟล์จำลองระบบ ---
+venv/
+.venv/
+python/venv/
+python/.venv/

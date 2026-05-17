@@ -79,17 +79,106 @@ class Stemmer:
             raise Exception(f"Source audio path does not exist: {source_audio_path}")
         track_filename = os.path.basename(source_audio_path)
         track_name = os.path.splitext(track_filename)[0]
+        
+        # --- 1. ค้นหาโมเดลในระบบหลักก่อน ---
         model = None
         for m in stemming_models_list:
             if m.name == model_name:
                 model = m
                 break
+        
+        # --- 2. ค้นหาแบบ Fuzzy ---
+        if model is None:
+            def normalize_str(s: str) -> str:
+                return s.lower().replace(" ", "").replace("_", "").replace("-", "")
+            
+            normalized_target = normalize_str(model_name)
+            for m in stemming_models_list:
+                if normalize_str(m.name) == normalized_target:
+                    model = m
+                    break
+                    
+        # --- 3. [ระบบยัดไส้โมเดลอัจฉริยะ (Force Bypass)]: หากเป็น Kim ให้เสกตัวแปรขึ้นมาเลยแบบไร้เงื่อนไขจุกจิก ---
+        if model is None:
+            class AutoMockModel:
+                def __init__(self, name, f_type, files):
+                    self.name = name
+                    self.type = f_type
+                    self.files = files
+            
+            # ถ้าชื่อมีคำว่า kim แม้แต่นิดเดียว ให้รัน Kim_Vocal_1.onnx ทันที
+            if "kim" in model_name.lower():
+                model = AutoMockModel("Kim_Vocal_1", MDX_ARCH_TYPE, ["Kim_Vocal_1.onnx"])
+                print("=== [Replay AI Patched]: Force loading Kim_Vocal_1.onnx into MDX-Net architecture ===")
+            
+            # เผื่อโมเดลตัวอื่นในอนาคตที่ไม่มีใน Config แต่มีไฟล์ .onnx วางอยู่ในเครื่อง
+            else:
+                potential_file = f"{model_name}.onnx"
+                if os.path.exists(os.path.join(weights_dir, potential_file)):
+                    model = AutoMockModel(model_name, MDX_ARCH_TYPE, [potential_file])
+                    print(f"=== [Replay AI Patched]: Auto-detected loose model {potential_file} ===")
+                    
+        # --- 4. หากยังไม่พบโมเดลใด ๆ จริงๆ ให้แจ้งเตือน ---
+        if model is None:
+            available_names = [m.name for m in stemming_models_list]
+            error_msg = (
+                f"ไม่พบคอนฟิกของโมเดลชื่อ '{model_name}' ในระบบหลังบ้าน (inference_conf.py) "
+                f"โมเดลที่สามารถเลือกใช้งานได้ในปัจจุบันคือ: {available_names}"
+            )
+            if status_setter:
+                status_setter(error_msg)
+            raise ValueError(error_msg)
+        
         lock = Stemmer._get_lock(source_audio_path, output_directory)
         with lock:
+            # มั่นใจว่าโฟลเดอร์สำหรับเก็บโครงสร้างโมเดลถูกสร้างขึ้นแล้ว
+            os.makedirs(weights_dir, exist_ok=True)
+
+            # --- ระบบตรวจสอบและดาวน์โหลดโมเดลแยกเสียง UVR อัตโนมัติ ป้องกัน NoSuchFile ---
+            files_to_check = [model.files[0]] if len(model.files) == 1 else model.files
+            for f_name in files_to_check:
+                target_file_path = os.path.join(weights_dir, f_name)
+                if not os.path.exists(target_file_path):
+                    msg = f"Downloading missing UVR model component: {f_name}... Please wait."
+                    if status_setter:
+                        status_setter(msg)
+                    print(msg)
+                    try:
+                        import requests
+                        # ลิงก์ดาวน์โหลดหลักความเร็วสูงจากศูนย์เก็บข้อมูลโมเดลสากล TRvlvr
+                        url = f"https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/{f_name}"
+                        response = requests.get(url, stream=True)
+                        
+                        # หากลิงก์หลักเกิดปัญหา ให้ใช้ลิงก์สำรองจาก HuggingFace Mirrors
+                        if response.status_code != 200:
+                            url = f"https://huggingface.co/Anjok/model-repo/resolve/main/{f_name}"
+                            response = requests.get(url, stream=True)
+                        if response.status_code != 200:
+                            url = f"https://huggingface.co/seanghay/uvr_models/resolve/main/{f_name}"
+                            response = requests.get(url, stream=True)
+                            
+                        if response.status_code == 200:
+                            with open(target_file_path, "wb") as f:
+                                for chunk in response.iter_content(chunk_size=8192):
+                                    if chunk:
+                                        f.write(chunk)
+                            print(f"Successfully downloaded UVR model component: {f_name}")
+                        else:
+                            raise Exception(f"Server returned HTTP status code {response.status_code}")
+                    except Exception as download_err:
+                        print(f"Auto-download failed for {f_name}: {download_err}")
+                        if len(model.files) == 1:
+                            raise RuntimeError(
+                                f"Required UVR model file '{f_name}' is missing and auto-download failed: {download_err}. "
+                                f"Please place it manually inside your 'data/models/' directory."
+                            )
+            # ---------------------------------------------------------------------------------------------
+
             model_path = os.path.join(weights_dir, model.files[0])
             if len(model.files) > 1:
                 # demucs models download a yaml file that has all the information regarding the model
                 model_path = os.path.join(weights_dir, demucs_model_name_mapper(model_name))
+            
             model_data: ModelData = ModelData(model_name, model_path=model_path, selected_process_method=model.type)
             safe_name = "".join(x for x in model_name if x.isalnum())
             track_dir = os.path.join(output_directory, safe_name, track_name)

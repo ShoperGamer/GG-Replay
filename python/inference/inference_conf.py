@@ -140,3 +140,5 @@ for model, filename in mdx_model_list.items():
     stemming_models_list.append(StemmingModel(name=model, files=[filename], type=MDX_ARCH_TYPE))
 for model, files in demucs_model_list.items():
     stemming_models_list.append(StemmingModel(name=model, files=files, type=DEMUCS_ARCH_TYPE))
+
+
