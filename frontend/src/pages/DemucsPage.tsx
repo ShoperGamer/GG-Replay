@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import Waveform from '../components/Waveform';
 import * as Wails from '../../wailsjs/go/main/App'; 
 
 interface SongOptions {
@@ -16,6 +15,7 @@ interface SongOptions {
   consonantProtection: number;
   outputFormat: string;
   volumeEnvelope: number;
+  outputName: string;
 }
 
 const DemucsPage: React.FC = () => {
@@ -24,7 +24,6 @@ const DemucsPage: React.FC = () => {
   const [progress, setProgress] = useState(0);
   const [statusMessage, setStatusMessage] = useState('');
   
-  // ตั้งค่าเริ่มต้นของระบบคัดแยกเสียงเสียงร้องหลัก
   const [stemmingMethod, setStemmingMethod] = useState('UVR-MDX-NET Voc FT');
   
   const [vocalsFile, setVocalsFile] = useState<{name: string, streamUrl: string, fullPath: string} | null>(null);
@@ -52,6 +51,8 @@ const DemucsPage: React.FC = () => {
     setStatusMessage('กำลังเริ่มต้นระบบคัดแยกเลเยอร์เสียง...');
 
     try {
+      const baseName = audioFile.name.replace(/\.[^/.]+$/, "");
+
       const options: SongOptions = {
         pitch: 0,
         instrumentalsPitch: 0,
@@ -65,7 +66,8 @@ const DemucsPage: React.FC = () => {
         indexRatio: 0.75,
         consonantProtection: 0.35,
         outputFormat: "wav",
-        volumeEnvelope: 1.0
+        volumeEnvelope: 1.0,
+        outputName: baseName
       };
 
       const jobId = await Wails.CreateSong("none_model", audioFile.name, options);
@@ -140,7 +142,6 @@ const DemucsPage: React.FC = () => {
 
       <div className="glass-card p-6 rounded-3xl border border-white/5 bg-slate-950/20 backdrop-blur shadow-2xl space-y-4">
         
-        {/* กล่องเลือกโมเดลแยกเสียงสเตมส์ */}
         <div className="bg-slate-900/60 p-4 rounded-xl border border-white/5 flex flex-col space-y-2">
           <label className="text-xs font-bold text-indigo-400 uppercase tracking-widest">Stemming Model Method (โหมดแยกไฟล์เสียง)</label>
           <select 
@@ -148,26 +149,9 @@ const DemucsPage: React.FC = () => {
             onChange={(e) => setStemmingMethod(e.target.value)}
             className="w-full bg-slate-950 text-sm font-medium text-slate-200 border border-white/10 p-3 rounded-xl outline-none cursor-pointer"
           >
-            <optgroup label="โมเดลสกัดเสียงคอรัส / ร้องนำชั้นเยี่ยม (Vocal Isolation)">
+            <optgroup label="โมเดลสกัดเสียง (Vocal Isolation)">
               <option value="UVR-MDX-NET Voc FT">UVR-MDX-NET Voc FT (โหมดดั้งเดิมยอดนิยม)</option>
               <option value="Kim_Vocal_1">Kim_Vocal_1 (โหมดพิเศษ: ดึงเฉพาะเสียงหลัก ลบเสียงประสานคอรัสออก)</option>
-            </optgroup>
-
-            <optgroup label="โมเดลคัดแยกตัดดนตรีทำคาราโอเกะ (Karaoke Modules)">
-              <option value="UVR-MDX-NET Karaoke">UVR-MDX-NET Karaoke</option>
-              <option value="UVR-MDX-NET Karaoke 2">UVR-MDX-NET Karaoke 2</option>
-              <option value="5_HP-Karaoke-UVR">5_HP-Karaoke-UVR</option>
-              <option value="6_HP-Karaoke-UVR">6_HP-Karaoke-UVR</option>
-              <option value="UVR_MDXNET_9482">UVR_MDXNET_9482</option>
-            </optgroup>
-
-            <optgroup label="โมเดลแยกเครื่องดนตรีหลายชิ้น (Demucs Transformers)">
-              <option value="v4 | htdemucs_ft">v4 | htdemucs_ft (แยกละเอียด 4 สเตม HQ)</option>
-              <option value="v4 | htdemucs">v4 | htdemucs (สเตมมาตรฐาน)</option>
-            </optgroup>
-
-            <optgroup label="โมเดลล้างเสียงห้องก้อง / เสียงสะท้อน (Acoustics Fixer)">
-              <option value="UVR-DeEcho-DeReverb by FoxJoy">UVR-DeEcho-DeReverb by FoxJoy</option>
             </optgroup>
           </select>
         </div>
@@ -193,8 +177,9 @@ const DemucsPage: React.FC = () => {
         {audioFile && !vocalsFile && (
           <div className="p-4 bg-slate-900/40 rounded-2xl border border-white/5 animate-fadeIn">
             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Original Track Preview</p>
-            <Waveform color="#6366f1" audioUrl={audioFile.path} />
-            <audio src={audioFile.path} controls className="w-full h-8 mt-2 opacity-70 accent-indigo-500" />
+            <div className="bg-slate-900/80 p-4 rounded-2xl border border-white/10 shadow-inner">
+              <audio src={audioFile.path} controls className="w-full h-10 accent-indigo-500 opacity-95" />
+            </div>
           </div>
         )}
 
@@ -211,7 +196,6 @@ const DemucsPage: React.FC = () => {
           ) : "START STEM SEPARATION"}
         </button>
 
-        {/* แผงเครื่องเล่นและดาวน์โหลดหลังคัดแยก */}
         {(vocalsFile || instrumentsFile) && (
           <div className="space-y-6 pt-4 border-t border-white/5 animate-fadeIn">
             
@@ -229,9 +213,8 @@ const DemucsPage: React.FC = () => {
                     ดาวน์โหลดไฟล์เสียงร้องนำ (.WAV)
                   </button>
                 </div>
-                <div className="bg-slate-900/60 p-3 rounded-xl space-y-3">
-                   <Waveform audioUrl={vocalsFile.streamUrl} color="#818cf8" />
-                   <audio src={vocalsFile.streamUrl} controls className="w-full h-8 opacity-90 accent-indigo-500" />
+                <div className="bg-slate-900/80 p-4 rounded-xl border border-white/10 shadow-inner">
+                   <audio src={vocalsFile.streamUrl} controls className="w-full h-10 accent-indigo-500 opacity-95" />
                 </div>
               </div>
             )}
@@ -250,9 +233,8 @@ const DemucsPage: React.FC = () => {
                     ดาวน์โหลดไฟล์ดนตรี+เสียงประสาน (.WAV)
                   </button>
                 </div>
-                <div className="bg-slate-900/60 p-3 rounded-xl space-y-3">
-                   <Waveform audioUrl={instrumentsFile.streamUrl} color="#c084fc" />
-                   <audio src={instrumentsFile.streamUrl} controls className="w-full h-8 opacity-90 accent-purple-500" />
+                <div className="bg-slate-900/80 p-4 rounded-xl border border-white/10 shadow-inner">
+                   <audio src={instrumentsFile.streamUrl} controls className="w-full h-10 accent-purple-500 opacity-95" />
                 </div>
               </div>
             )}

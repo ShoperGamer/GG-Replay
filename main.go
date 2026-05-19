@@ -17,7 +17,7 @@ func main() {
 
 	// ตั้งค่าและรัน Wails
 	err := wails.Run(&options.App{
-		Title:  "Replay AI Voice",
+		Title:  "GG Replay",
 		Width:  1024,
 		Height: 768,
 		AssetServer: &assetserver.Options{

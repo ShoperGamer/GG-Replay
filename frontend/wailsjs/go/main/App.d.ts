@@ -30,7 +30,7 @@ export function GetSeparatedFiles():Promise<Array<string>>;
 
 export function GetStoredModels():Promise<Array<string>>;
 
-export function MergeAudio(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Record<string, string>>;
+export function MergeAudio(arg1:string,arg2:string,arg3:number,arg4:number,arg5:string):Promise<Record<string, string>>;
 
 export function SaveDeviceSetting(arg1:string):Promise<boolean>;
 

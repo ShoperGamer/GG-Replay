@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import Waveform from '../components/Waveform';
 import * as Wails from '../../wailsjs/go/main/App'; 
 
 const Summary: React.FC = () => {
@@ -14,6 +13,9 @@ const Summary: React.FC = () => {
   
   const [isMerging, setIsMerging] = useState(false);
   const [masterTrack, setMasterTrack] = useState<{name: string, streamUrl: string, relPath: string} | null>(null);
+
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [customFileName, setCustomFileName] = useState("AI_Cover_Master");
 
   useEffect(() => {
     fetchAvailableAssets();
@@ -54,21 +56,27 @@ const Summary: React.FC = () => {
     }
   };
 
-  const handleMergeStudioMix = async () => {
+  const handlePreMergeClick = () => {
     if (!selectedVocal) return alert("กรุณาเลือกหรือระบุแทร็กเสียงร้องนำ (AI Vocal)");
     if (!selectedInst) return alert("กรุณาเลือกหรือระบุแทร็กดนตรีบรรเลง (Instrumental)");
+    setIsModalOpen(true);
+  };
 
+  const handleMergeStudioMix = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    
+    setIsModalOpen(false);
     setIsMerging(true);
     setMasterTrack(null);
 
     try {
-      const res = await (Wails as any).MergeAudio(selectedVocal, selectedInst, vocalVolume, instVolume);
+      const res = await (Wails as any).MergeAudio(selectedVocal, selectedInst, vocalVolume, instVolume, customFileName.trim());
       
       if (res && res.status === "success") {
         setMasterTrack({
           name: res.fileName,
           streamUrl: res.streamUrl,
-          relPath: res.relPath // เก็บค่าสัมพัทธ์เซฟตี้ข้ามปัญหา Windows Path พัง
+          relPath: res.relPath
         });
         alert("กระบวนการผสมสัญญาณเสียงเสร็จสิ้น! สามารถสตรีมฟังผลงานและส่งออกได้ทันที");
       } else {
@@ -81,7 +89,6 @@ const Summary: React.FC = () => {
     }
   };
 
-  // --- [แก้ไข Bug สำเร็จ]: เปลี่ยนมาเรียกใช้ DownloadFile ผ่านอาร์กิวเมนต์แบบเดียวกับ History เพื่อให้บันทึกไฟล์ได้ลื่นไหล 100% ---
   const handleExportFullSongMaster = async () => {
     if (!masterTrack) return;
     try {
@@ -99,7 +106,7 @@ const Summary: React.FC = () => {
   };
 
   return (
-    <div className="max-w-5xl mx-auto space-y-8 animate-fadeIn text-slate-200 p-4 pb-20">
+    <div className="max-w-5xl mx-auto space-y-8 animate-fadeIn text-slate-200 p-4 pb-20 relative">
       <header className="mb-6">
         <h2 className="text-3xl font-black text-white uppercase tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
           Studio Master & Final Export
@@ -174,7 +181,7 @@ const Summary: React.FC = () => {
 
             <button 
               disabled={isMerging || !selectedVocal || !selectedInst}
-              onClick={handleMergeStudioMix}
+              onClick={handlePreMergeClick}
               className="w-full py-4 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-600 hover:opacity-95 text-white rounded-2xl font-black shadow-xl disabled:opacity-20 disabled:cursor-not-allowed transition-all active:scale-[0.99] text-xs tracking-widest uppercase cursor-pointer"
             >
               {isMerging ? "กำลังรวมช่องสัญญาณคลื่นความถี่..." : "COMPILE FULL COVER SONG"}
@@ -199,9 +206,48 @@ const Summary: React.FC = () => {
               EXPORT FINAL AI COVER (.MP3)
             </button>
           </div>
-          <div className="bg-slate-950/40 p-4 rounded-2xl border border-white/5 shadow-inner">
-            <Waveform color="#10b981" audioUrl={masterTrack.streamUrl} />
-            <audio src={masterTrack.streamUrl} controls className="w-full h-8 accent-emerald-500 opacity-90 mt-2" />
+          <div className="bg-slate-900/80 p-4 rounded-2xl border border-white/10 shadow-inner">
+            <audio src={masterTrack.streamUrl} controls autoPlay className="w-full h-10 accent-emerald-500 opacity-95" />
+          </div>
+        </div>
+      )}
+
+      {isModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-white/10 rounded-3xl p-6 w-full max-w-md shadow-2xl space-y-5">
+            <div className="space-y-1">
+              <h3 className="text-lg font-black text-white uppercase tracking-wider">Save Master Mix As</h3>
+              <p className="text-slate-400 text-xs">กรุณาตั้งชื่อไฟล์ผลงานของคุณ (ระบบจะเติม .mp3 ให้อัตโนมัติ)</p>
+            </div>
+            
+            <form onSubmit={handleMergeStudioMix} className="space-y-5">
+              <div>
+                <input 
+                  type="text" 
+                  autoFocus
+                  value={customFileName}
+                  onChange={(e) => setCustomFileName(e.target.value)}
+                  className="w-full bg-slate-950 text-emerald-400 font-mono rounded-xl p-3 text-sm outline-none border border-emerald-500/30 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/50"
+                  placeholder="e.g. My_Awesome_Cover"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2 border-t border-white/5">
+                <button 
+                  type="button" 
+                  onClick={() => setIsModalOpen(false)}
+                  className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs tracking-wider uppercase transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  className="flex-1 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:opacity-90 text-white rounded-xl font-black text-xs tracking-wider uppercase shadow-lg shadow-emerald-900/50 transition-all cursor-pointer"
+                >
+                  Render Mix
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

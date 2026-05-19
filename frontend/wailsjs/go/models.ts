@@ -14,6 +14,7 @@ export namespace main {
 	    consonantProtection: number;
 	    outputFormat: string;
 	    volumeEnvelope: number;
+	    outputName: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new SongOptions(source);
@@ -34,6 +35,7 @@ export namespace main {
 	        this.consonantProtection = source["consonantProtection"];
 	        this.outputFormat = source["outputFormat"];
 	        this.volumeEnvelope = source["volumeEnvelope"];
+	        this.outputName = source["outputName"];
 	    }
 	}
 

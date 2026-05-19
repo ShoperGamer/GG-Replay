@@ -1,16 +1,41 @@
 import os
-import ffmpeg
+import subprocess
 import numpy as np
 
 
 def load_audio(file, sr) -> np.ndarray:
     try:
         # https://github.com/openai/whisper/blob/main/whisper/audio.py#L26
-        # This launches a subprocess to decode audio while down-mixing and resampling as necessary.
-        # Requires the ffmpeg CLI and `ffmpeg-python` package to be installed.
+        # [แก้ไขสำคัญ]: ปรับปรุงมาใช้ระบบ Subprocess ของ Python เรียกหา ffmpeg.exe CLI โดยตรง
+        # เพื่อตัดขาด dependency แพ็กเกจ ffmpeg-python ออกอย่างถาวร รันผ่าน venv ได้ 100%
         file = file.strip(" ").strip('"').strip("\n").strip('"').strip(" ")
-        job = ffmpeg.input(file, threads=0).output("-", format="f32le", acodec="pcm_f32le", ac=1, ar=sr)
-        out, _ = job.run(cmd=["ffmpeg", "-nostdin"], capture_stdout=True, capture_stderr=True)
+        
+        cmd = [
+            "ffmpeg",
+            "-nostdin",
+            "-i", file,
+            "-f", "f32le",
+            "-acodec", "pcm_f32le",
+            "-ac", "1",
+            "-ar", str(sr),
+            "-"
+        ]
+        
+        # ป้องกันไม่ให้หน้าต่าง cmd สีดำเด้งขึ้นมาขัดจังหวะผู้ใช้งานบน Windows
+        creationflags = 0
+        if os.name == 'nt':
+            creationflags = 0x08000000  # CREATE_NO_WINDOW
+
+        res = subprocess.run(
+            cmd,
+            capture_output=True,
+            creationflags=creationflags
+        )
+        
+        if res.returncode != 0:
+            raise RuntimeError(res.stderr.decode('utf-8', errors='ignore'))
+            
+        out = res.stdout
 
     except Exception as e:
         raise RuntimeError(f"Failed to load audio file {file}: {e}")

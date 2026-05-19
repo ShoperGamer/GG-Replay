@@ -58,8 +58,8 @@ export function GetStoredModels() {
   return window['go']['main']['App']['GetStoredModels']();
 }
 
-export function MergeAudio(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['MergeAudio'](arg1, arg2, arg3, arg4);
+export function MergeAudio(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['MergeAudio'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function SaveDeviceSetting(arg1) {

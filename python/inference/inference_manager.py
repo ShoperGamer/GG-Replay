@@ -12,7 +12,6 @@ from typing import Optional
 
 import numpy as np
 import torch
-import yt_dlp
 from pydub import AudioSegment
 from scipy.io import wavfile
 
@@ -35,8 +34,6 @@ class InferenceManager:
             start = sample_rate * (self.sample_mode_start_time or 0)
             end = start + (sample_rate * 30)
             audio_data = audio_data[start:end]
-            # these md5s dont match, not a huge deal but it means we do a bit of extra work
-            # might be worth looking into in the future
             self.track_md5 = hashlib.md5(audio_data.tobytes()).hexdigest()
             sample_file = os.path.join(
                 self.originals_directory,
@@ -45,10 +42,12 @@ class InferenceManager:
             wavfile.write(sample_file, sample_rate, audio_data)
             self.source_audio_path = sample_file
 
-        self.track_md5 = hashlib.md5(open(self.source_audio_path, "rb").read()).hexdigest()
+        hasher = hashlib.md5()
+        with open(self.source_audio_path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                hasher.update(chunk)
+        self.track_md5 = hasher.hexdigest()
         
-        # --- [แก้ไขสำเร็จ]: เปลี่ยนจาก // เป็น # คอมเมนต์ให้ถูกหลักไวยากรณ์ภาษา Python ป้องกันอาการ Syntax Error ---
-        # ทำสำเนาไฟล์ต้นฉบับไว้ในแอปเสมอเพื่อให้ Frontend ดึงข้อมูลไปรันได้ตลอดเวลา
         os.makedirs(self.originals_directory, exist_ok=True)
         
         extension = os.path.splitext(self.source_audio_path)[1]
@@ -89,6 +88,24 @@ class InferenceManager:
         self.originals_file = None
         self.joined_track = None
 
+        # 🎯 [ระบบสกัดชื่อไฟล์แบบไดนามิก]: ดักจับค่าชื่อไฟล์ที่ส่งมาจากออปชันหน้าบ้าน
+        self.output_name = "converted_vocals"
+        if options and hasattr(options, 'outputName') and options.outputName:
+            self.output_name = options.outputName
+        elif job_id:
+            try:
+                import tempfile
+                import json
+                temp_config_path = os.path.join(tempfile.gettempdir(), f"job_{job_id}.json")
+                if os.path.exists(temp_config_path):
+                    with open(temp_config_path, "r", encoding="utf-8") as f:
+                        raw_data = json.load(f)
+                        raw_opts = raw_data.get("options", {})
+                        if isinstance(raw_opts, dict) and raw_opts.get("outputName"):
+                            self.output_name = raw_opts.get("outputName")
+            except Exception:
+                pass
+
         options = options or CreateSongOptions()
         pre_stemmed = options is not None and options.preStemmed
         sample_mode_30s = options is not None and options.sampleMode
@@ -98,7 +115,7 @@ class InferenceManager:
         vocals_only = options is not None and options.vocalsOnly
         stemming_method = options is not None and options.stemmingMethod
 
-        self.f0_method = options is not None and options.f0Method or "rvmpe"
+        self.f0_method = options is not None and options.f0Method or "rmvpe"
         self.output_format = options is not None and options.outputFormat or "mp3_320k"
         self.options = options
         self.pitch: Optional[int] = pitch
@@ -112,7 +129,7 @@ class InferenceManager:
         self.models_path = models_path
         self.weights_path = weights_path
         self.output_directory = os.path.join(output_directory, job_id)
-        # ensure output dir exists
+        
         os.makedirs(self.output_directory, exist_ok=True)
         self.stems_directory = os.path.join(output_directory, "stems")
         self.yt_cache = os.path.join(output_directory, "yt-cache")
@@ -149,7 +166,6 @@ class InferenceManager:
     def load_model(self):
         self.model = self.find_model(self.models_path, self.model_name)
         if self.model is None:
-            logger.info(f"Unable to load model {self.model_name}")
             runtime_error = RuntimeError(f"Unable to load model {self.model_name}")
             self.error = runtime_error
             raise runtime_error
@@ -177,9 +193,17 @@ class InferenceManager:
             )
             elapsed_time = time.time() - start_time
             logger.info(f"UVR: Separation complete. Elapsed time: {elapsed_time}")
+            
+            # 🎯 [Advanced 2-Pass Sequential UVR]: ล้างเสียงก้องห้องและสลัดเสียงคอรัสประสาน/ฮัมเพลงเมื่อเปิด De-Echo
             if self.options.deEchoDeReverb:
-                self.check_and_update_status("De-Echoing input file")
-                md5_vocals = hashlib.md5(open(self.vocals_file, "rb").read()).hexdigest()
+                self.check_and_update_status("De-Echoing input file...")
+                
+                hasher_vocals = hashlib.md5()
+                with open(self.vocals_file, "rb") as f:
+                    for chunk in iter(lambda: f.read(65536), b""):
+                        hasher_vocals.update(chunk)
+                md5_vocals = hasher_vocals.hexdigest()
+
                 vocal_copies_dir = os.path.join(
                     self.stems_directory,
                     "vocals_copies",
@@ -196,7 +220,7 @@ class InferenceManager:
                 def update_status_deecho(msg):
                     self.check_and_update_status(f"De-echoing track... {msg}")
 
-                self.check_and_update_status("De-Echoing input file")
+                # 🚀 Pass ที่ 1: ล้างเสียงสะท้อน (Room Reverb Clean) ผ่าน FoxJoy
                 self.vocals_file, echo_and_reverb_file = Stemmer.separate_track(
                     md5_vocals_file,
                     self.stems_directory,
@@ -204,8 +228,23 @@ class InferenceManager:
                     "UVR-DeEcho-DeReverb by FoxJoy",
                     update_status_deecho,
                 )
+                
+                # 🚀 Pass ที่ 2: ลบเสียงร้องคอรัส เสียงซ้อน และเสียงฮัมเพลงออกด้วย Kim_Vocal_1
+                self.check_and_update_status("Purifying Lead Vocals (Removing Harmonies, Overlaps & Humming)...")
+                
+                def update_status_purify(msg):
+                    self.check_and_update_status(f"Purifying Vocals... {msg}")
+                
+                self.vocals_file, backing_vocals_file = Stemmer.separate_track(
+                    self.vocals_file,
+                    self.stems_directory,
+                    self.weights_path,
+                    "Kim_Vocal_1", 
+                    update_status_purify,
+                )
+
                 elapsed_time = time.time() - start_time
-                logger.info(f"De-echo complete. Elapsed time: {elapsed_time}")
+                logger.info(f"Advanced Vocal Purification complete. Total elapsed time: {elapsed_time}")
 
         logger.info("UVR: Track separation complete.")
         logger.info("---------------------------------")
@@ -251,14 +290,29 @@ class InferenceManager:
                 self.options,
             )
             self.check_and_update_status("Creating audio files...")
-            outputs = os.path.join(self.output_directory, "audio-outputs")
-            converted_vocals_file = f"converted_vocals.wav"
-            vocal_output = os.path.join(outputs, converted_vocals_file)
-            self.converted_vocals_file = vocal_output
-            os.makedirs(outputs, exist_ok=True)
             
-            # ปรับระดับสเกลสัญญาเสียง ป้องกันคลิปปิ้งและเสียงหุ่นยนต์บน GPU Mode
+            # 🎯 [แก้ไขชื่อไฟล์ผลลัพธ์แบบไดนามิก]: ประกอบชื่อไฟล์ปลายทางตามค่าของ self.output_name
+            ext = ".wav" if self.output_format == "wav" else ".mp3"
+            output_file = f"{self.output_name}{ext}"
+            
+            parameters = {"format": "wav"}
+            if self.output_format == "mp3_192k":
+                parameters = {"format": "mp3", "bitrate": "192k"}
+            elif self.output_format == "mp3_320k":
+                parameters = {"format": "mp3", "bitrate": "320k"}
+                
+            joined_track_export = os.path.join(self.output_directory, output_file)
+            self.output_filepath = joined_track_export
+            self.converted_vocals_file = joined_track_export
+
+            temp_wav_path = os.path.join(self.output_directory, "temp_inference_vocal.wav")
+            
             audio_opt = np.nan_to_num(np.array(audio_opt, dtype=np.float32))
+
+            peak_limit = np.percentile(np.abs(audio_opt), 99.9)
+            if peak_limit > 0:
+                audio_opt = np.clip(audio_opt, -peak_limit, peak_limit)
+                
             max_v = np.max(np.abs(audio_opt))
             if max_v > 0:
                 if max_v <= 1.01:
@@ -268,43 +322,21 @@ class InferenceManager:
             else:
                 audio_opt = audio_opt.astype(np.int16)
                 
-            logger.info(f"RVCv2: Inference succeeded. Writing to {vocal_output}...")
-            wavfile.write(vocal_output, tgt_sr, audio_opt)
-            logger.info(f"RVCv2: Finished! Saved output to {vocal_output}")
+            logger.info(f"RVCv2: Inference succeeded. Writing temporary wav...")
+            wavfile.write(temp_wav_path, tgt_sr, audio_opt)
             logger.info("---------------------------------")
-            logger.info("Rejoining the track...")
             
-            vocal = AudioSegment.from_wav(vocal_output)
-            if self.pre_stemmed:
-                self.joined_track = vocal
-            elif self.instrumentals_file is not None:
-                instrumental = AudioSegment.from_wav(self.instrumentals_file)
-                if self.instrumentals_pitch:
-                    logger.info("RVCv2: Adjusting pitch of instrumentals...")
-                    instrumental = self.pitch_shift(instrumental, self.instrumentals_pitch)
-                self.joined_track = instrumental.overlay(vocal)
-            else:
-                logger.info("RVCv2: Unable to find instrumentals file. Skipping rejoin.")
+            logger.info("Exporting completed vocal track...")
+            vocal = AudioSegment.from_wav(temp_wav_path)
+            self.joined_track = vocal
 
-            logger.info("Track rejoined.")
             logger.info("Writing completed file...")
-            if self.output_format == "wav":
-                output_file = "final.wav"
-                parameters = {"format": "wav"}
-            elif self.output_format == "mp3_192k":
-                output_file = "final.mp3"
-                parameters = {"format": "mp3", "bitrate": "192k"}
-            elif self.output_format == "mp3_320k":
-                output_file = "final.mp3"
-                parameters = {"format": "mp3", "bitrate": "320k"}
-            else:
-                logger.info("Unsupported output format: {}. Using default (mp3_192k).".format(self.output_format))
-                output_file = "final.mp3"
-                parameters = {"format": "mp3", "bitrate": "192k"}
-            joined_track_export = os.path.join(self.output_directory, output_file)
             self.joined_track.export(joined_track_export, **parameters)
+            
+            if os.path.exists(temp_wav_path):
+                os.remove(temp_wav_path)
+                
             logger.info(f"Track successfully written to: {joined_track_export}")
-            self.output_filepath = joined_track_export
             logger.info("---------------------------------")
             logger.info("Inference complete.")
             self.model.clearMemory()
@@ -320,62 +352,8 @@ class InferenceManager:
             self.error = e
             self.status = "errored"
             self.check_and_update_status(f"Error: {e}", "errored")
-            logger.info("RVCv2: Inference failed. Here's the traceback: ")
             traceback.print_exc()
-            logger.info(e)
             raise e
-
-    def check_and_download_youtube_audio(self, url):
-        youtube_regex = (
-            r"(https?://)?(www\.)?"
-            "(youtube|youtu|youtube-nocookie)\.(com|be)/"
-            "(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})"
-        )
-
-        youtube_regex_match = re.match(youtube_regex, url)
-        if not youtube_regex_match:
-            return False, None
-
-        def my_hook(d):
-            if d["status"] == "finished":
-                self.check_and_update_status("Youtube download complete")
-            if d["status"] == "downloading":
-                self.check_and_update_status(f"Downloading youtube audio:{d['_percent_str']}{d['_speed_str']}")
-
-        ydl_opts = {
-            "format": "bestaudio/best",
-            "postprocessors": [
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "320",
-                }
-            ],
-            "noplaylist": True,
-            "progress_hooks": [my_hook],
-        }
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info_dict = ydl.extract_info(url, download=False)
-            video_title = info_dict.get("title", None)
-
-        safe_title = (
-            video_title.replace(" ", "_").replace("/", "_").replace("\\", "_").replace(":", "_").replace("*", "_")
-        )
-        safe_title = "".join(x for x in safe_title if x.isalnum())
-        yt_cache_len = len(self.yt_cache)
-        if len(safe_title) + yt_cache_len > 255:
-            safe_title = safe_title[: 255 - yt_cache_len]
-        ydl_opts["outtmpl"] = f"{self.yt_cache}/{safe_title}"
-
-        output_path = f"{self.yt_cache}/{safe_title}.mp3"
-        if os.path.exists(output_path):
-            return True, output_path
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            self.check_and_update_status("Downloading audio from YouTube...")
-            ydl.download([url])
-            return True, output_path
 
     def check_and_update_status(self, status_message, status: STATUS = None):
         self.status = status if status else self.status
@@ -412,39 +390,15 @@ class InferenceManager:
             self.status = "errored"
             runtime_error = RuntimeError("ffmpeg not found")
             self.error = runtime_error
-            logger.info(f"App path: {os.environ.get('PATH')}")
             raise runtime_error
 
     def set_source_audio_path(self):
-        is_yt_video, yt_audio_path = self.check_and_download_youtube_audio(self.source_audio_path)
-        if is_yt_video:
-            if not os.path.exists(yt_audio_path):
-                raise RuntimeError(f"Unable to download YouTube video: {self.source_audio_path}")
-            self.set_track_values(yt_audio_path)
+        if not os.path.exists(self.source_audio_path):
+            raise RuntimeError(f"Source audio file not found: {self.source_audio_path}")
+        self.set_track_values(self.source_audio_path)
 
     def create_preview_tracks(self):
-        files = [
-            self.vocals_file,
-            self.converted_vocals_file,
-            self.instrumentals_file,
-            self.pre_deecho_vocals_file,
-            self.output_filepath,
-        ]
-        for file in files:
-            try:
-                if not file:
-                    continue
-                if os.path.exists(file) and file.endswith("wav"):
-                    filename, ext = os.path.splitext(file)
-                    preview_file = f"{filename}_preview.mp3"
-                    preview_path = os.path.join(os.path.dirname(file), preview_file)
-                    if os.path.exists(preview_path):
-                        continue
-                    logger.info(f"Creating preview track: {preview_file}")
-                    vocal = AudioSegment.from_wav(file)
-                    vocal.export(preview_path, format="mp3", bitrate="192k")
-            except Exception as e:
-                logger.error(f"Error creating preview track: {e}")
+        pass
 
     def infer(self):
         start_time = time.time()
@@ -453,12 +407,10 @@ class InferenceManager:
             self.check_deps()
             self.check_and_update_status("Dependencies checked")
             self.set_source_audio_path()
-            logger.info(f"Source audio path: {self.source_audio_path}")
             if self.vocals_only:
                 self.check_and_update_status("Skipping inference due to vocalsOnly option")
                 self.stem_and_load_input_track()
                 self.output_filepath = self.vocals_file
-                self.create_preview_tracks()
                 return
             self.check_and_update_status("Loading model...")
             self.load_model()
@@ -467,11 +419,9 @@ class InferenceManager:
 
             self.check_and_update_status("Performing inference...")
             self.perform_inference()
-            self.create_preview_tracks()
             if self.status != "stopped":
                 self.check_and_update_status("Completed", "completed")
         except RuntimeError as e:
-            logger.info(e)
             traceback.print_exc()
             self.error = e
             if self.status == "stopped":
@@ -483,13 +433,10 @@ class InferenceManager:
                 return
             self.error = e
             self.check_and_update_status("Error", "errored")
-            logger.error(e)
             traceback.print_exc()
         finally:
             if self.status == "processing":
                 self.check_and_update_status("Completed", "completed")
-            logger.info("Last progress response:")
-            logger.info(self.last_progress_resp)
             elapsed_time = time.time() - start_time
             logger.info(f"Total elapsed time: {elapsed_time}")
 

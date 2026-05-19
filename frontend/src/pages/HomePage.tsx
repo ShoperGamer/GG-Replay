@@ -1,5 +1,4 @@
-import React, { useState, useEffect } from 'react';
-import Waveform from '../components/Waveform';
+import React, { useState, useEffect, useRef } from 'react';
 import * as Wails from '../../wailsjs/go/main/App'; 
 
 interface SongOptions {
@@ -16,6 +15,7 @@ interface SongOptions {
   consonantProtection: number;
   outputFormat: string;
   volumeEnvelope: number;
+  outputName: string;
 }
 
 const HomePage: React.FC = () => {
@@ -31,6 +31,9 @@ const HomePage: React.FC = () => {
   const [activeDevice, setActiveDevice] = useState('cuda');
   const [wizardSelection, setWizardSelection] = useState('cuda');
 
+  const [showFilenameModal, setShowFilenameModal] = useState(false);
+  const [customFilename, setCustomFilename] = useState('');
+
   const [deEchoDeReverb, setDeEchoDeReverb] = useState(false);
   const [instrumentalsPitch, setInstrumentalsPitch] = useState(0);
   const [f0Method, setF0Method] = useState('rmvpe');
@@ -40,11 +43,17 @@ const HomePage: React.FC = () => {
   const [indexRatio, setIndexRatio] = useState(0.45); 
   const [consonantProtection, setConsonantProtection] = useState(0.40); 
   const [volumeEnvelope, setVolumeEnvelope] = useState(1.0);
-  const [stemmingMethod, setStemmingMethod] = useState('UVR-MDX-NET Voc FT');
+  
+  const [stemmingMethod, setStemmingMethod] = useState('UVR-MDX-NET-Voc_FT');
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     loadModels();
     checkHardwareSetting();
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
   }, []);
 
   const checkHardwareSetting = async () => {
@@ -98,12 +107,24 @@ const HomePage: React.FC = () => {
     if (next >= min && next <= max) setter(next);
   };
 
-  const handleRunInference = async () => {
+  const handleOpenFilenameModal = () => {
     if (!audioFile || !selectedModel) return alert("กรุณาเลือกโมเดลและไฟล์เสียงร้องก่อน");
     
+    const baseName = audioFile.name.replace(/\.[^/.]+$/, "");
+    setCustomFilename(`${baseName}_cover`);
+    setShowFilenameModal(true);
+  };
+
+  const handleRunInference = async () => {
+    if (!audioFile) return;
+    if (!customFilename.trim()) return alert("กรุณาระบุชื่อไฟล์ผลลัพธ์ด้วยครับ");
+    
+    setShowFilenameModal(false);
     setIsLoading(true);
     setProgress(0);
     setOutputFile(null); 
+
+    if (intervalRef.current) clearInterval(intervalRef.current);
 
     try {
       const options: SongOptions = {
@@ -119,38 +140,45 @@ const HomePage: React.FC = () => {
         indexRatio: indexRatio,
         consonantProtection: consonantProtection,
         outputFormat: outputFormat,
-        volumeEnvelope: volumeEnvelope
+        volumeEnvelope: volumeEnvelope,
+        outputName: customFilename.trim()
       };
 
       const jobId = await Wails.CreateSong(selectedModel, audioFile.name, options);
       if (!jobId) throw new Error("ไม่สามารถเริ่มการประมวลผลได้");
 
-      const interval = setInterval(async () => {
-        const jobStatus: any = await Wails.GetJobProgress(jobId);
-        
-        if (jobStatus) {
-           if (jobStatus.progress !== undefined) {
-             setProgress(Math.round(jobStatus.progress));
-           } else if (jobStatus.status === 'processing') {
-             setProgress(prev => (prev < 95 ? prev + 2 : prev));
-           }
-           
-           if (jobStatus.status === 'success' || jobStatus.status === 'completed') {
-             clearInterval(interval);
-             setIsLoading(false);
-             setProgress(100);
-             
-             if (jobStatus.outputFilepath) {
-                const streamOutputUrl = await (Wails as any).GetAudioUrlByFullPath(jobStatus.outputFilepath);
-                const outName = jobStatus.outputFilepath.split(/[\\/]/).pop() || "converted_vocals.wav";
-                setOutputFile({ name: outName, path: streamOutputUrl, fullPath: jobStatus.outputFilepath });
+      intervalRef.current = setInterval(async () => {
+        try {
+          const jobStatus: any = await Wails.GetJobProgress(jobId);
+          
+          if (jobStatus) {
+             if (jobStatus.progress !== undefined) {
+               setProgress(Math.round(jobStatus.progress));
+             } else if (jobStatus.status === 'processing') {
+               setProgress(prev => (prev < 95 ? prev + 2 : prev));
              }
-             alert("แปลงน้ำเสียง AI Cover เสร็จสมบูรณ์! เชิญก้าวเข้าสู่เมนูพรีเซนต์รวมเสียงถัดไปได้เลย");
-           } else if (jobStatus.status === 'failed' || jobStatus.status === 'errored') {
-             clearInterval(interval);
-             setIsLoading(false);
-             alert("การประมวลผลล้มเหลว: " + (jobStatus.error || "Unknown Inference Error"));
-           }
+             
+             if (jobStatus.status === 'success' || jobStatus.status === 'completed') {
+               if (intervalRef.current) clearInterval(intervalRef.current);
+               setIsLoading(false);
+               setProgress(100);
+               
+               if (jobStatus.outputFilepath) {
+                  const streamOutputUrl = await (Wails as any).GetAudioUrlByFullPath(jobStatus.outputFilepath);
+                  const outName = jobStatus.outputFilepath.split(/[\\/]/).pop() || "converted_vocals.wav";
+                  setOutputFile({ name: outName, path: streamOutputUrl, fullPath: jobStatus.outputFilepath });
+               }
+               alert("แปลงน้ำเสียง AI Cover เสร็จสมบูรณ์! เชิญก้าวเข้าสู่เมนูพรีเซนต์รวมเสียงถัดไปได้เลย");
+             } else if (jobStatus.status === 'failed' || jobStatus.status === 'errored') {
+               if (intervalRef.current) clearInterval(intervalRef.current);
+               setIsLoading(false);
+               alert("การประมวลผลล้มเหว: " + (jobStatus.error || "Unknown Inference Error"));
+             }
+          }
+        } catch (loopErr) {
+          console.error("Error polling job progress:", loopErr);
+          if (intervalRef.current) clearInterval(intervalRef.current);
+          setIsLoading(false);
         }
       }, 1500);
 
@@ -172,7 +200,7 @@ const HomePage: React.FC = () => {
         </div>
         <button 
           onClick={() => setShowWizard(true)}
-          className={`mt-4 sm:mt-0 flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold border cursor-pointer transition-all hover:scale-105 active:scale-95 ${
+          className={`mt-4 sm:mt-0 flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold border cursor-pointer transition-all hover:scale-105 active:scale-[0.95] ${
             activeDevice === 'cuda' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
           }`}
         >
@@ -253,8 +281,9 @@ const HomePage: React.FC = () => {
               <div className="bg-slate-900/60 p-3.5 rounded-xl border border-white/5 flex flex-col justify-center space-y-1.5">
                 <h4 className="text-xs font-bold text-white">Pitch Detection (f0)</h4>
                 <select value={f0Method} onChange={(e) => setF0Method(e.target.value)} className="w-full bg-slate-950 text-xs text-slate-200 border border-white/10 p-2 rounded-lg outline-none cursor-pointer">
-                  <option value="rmvpe">Mangio-RMVPE (คัดกรองสัญญาณแม่นยำสูง)</option>
-                  <option value="crepe">Crepe (เกาะโน้ตเสียงหลบได้เนียนหนา)</option>
+                  <option value="rmvpe">Mangio-RMVPE </option>
+                  <option value="crepe">Crepe </option>
+                  <option value="harvest">Harvest </option>
                 </select>
               </div>
 
@@ -298,7 +327,11 @@ const HomePage: React.FC = () => {
             )}
           </div>
 
-          <button disabled={isLoading || !audioFile || !selectedModel} onClick={handleRunInference} className="w-full py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-95 text-white rounded-2xl font-bold shadow-xl disabled:opacity-20 transition-all active:scale-[0.99] text-xs tracking-wider uppercase">
+          <button 
+            disabled={isLoading || !audioFile || !selectedModel} 
+            onClick={handleOpenFilenameModal} 
+            className="w-full py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-95 text-white rounded-2xl font-bold shadow-xl disabled:opacity-20 transition-all active:scale-[0.99] text-xs tracking-wider uppercase"
+          >
             {isLoading ? `กำลังแปลงกระบวนการสัญญาณเสียง... ${progress}%` : "CONVERT VOICE NOW"}
           </button>
 
@@ -307,15 +340,59 @@ const HomePage: React.FC = () => {
               <div className="p-4 bg-emerald-950/10 rounded-2xl border border-emerald-500/20 shadow-lg animate-fadeIn">
                 <p className="text-xs font-bold text-emerald-400 uppercase tracking-widest mb-1">✨ Converted AI Vocal Stack Ready</p>
                 <p className="text-[10px] text-slate-500 font-mono mb-2 truncate">Location: {outputFile.name}</p>
-                <div className="bg-emerald-950/20 p-3 rounded-xl space-y-3 border border-emerald-500/10">
-                  <Waveform color="#10b981" audioUrl={outputFile.path} />
-                  <audio src={outputFile.path} controls className="w-full h-8 rounded-lg opacity-95 accent-emerald-500" />
+                <div className="bg-slate-900/80 p-4 rounded-2xl border border-white/10 shadow-inner">
+                  <audio src={outputFile.path} controls autoPlay className="w-full h-10 accent-emerald-500 opacity-95" />
                 </div>
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {showFilenameModal && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-white/10 p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-6">
+            <div className="text-center">
+              <h2 className="text-xl font-black text-white uppercase tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
+                ตั้งชื่อไฟล์ผลลัพธ์
+              </h2>
+              <p className="text-slate-400 text-xs mt-1">กรุณาระบุชื่อไฟล์เสียง RVC AI Cover ตามที่คุณต้องการ</p>
+            </div>
+            
+            <div className="space-y-2">
+              <label className="block text-[10px] font-bold text-indigo-400 uppercase tracking-widest">File Name Output</label>
+              <div className="relative flex items-center bg-slate-950 rounded-xl border border-white/10 focus-within:border-indigo-500 transition-all p-1">
+                <input 
+                  type="text" 
+                  className="w-full bg-transparent text-white rounded-xl p-2.5 text-sm outline-none font-medium placeholder-slate-600 focus:ring-0"
+                  placeholder="ระบุชื่อไฟล์ที่ต้องการ..."
+                  value={customFilename}
+                  onChange={(e) => setCustomFilename(e.target.value)}
+                />
+                <span className="text-xs font-mono font-bold text-slate-500 pr-3 select-none">
+                  .{outputFormat === 'wav' ? 'wav' : 'mp3'}
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              <button 
+                onClick={() => setShowFilenameModal(false)}
+                className="py-3 bg-slate-800 hover:bg-slate-700/80 text-slate-300 font-bold rounded-xl text-xs uppercase tracking-wider transition-all cursor-pointer"
+              >
+                ยกเลิก
+              </button>
+              <button 
+                onClick={handleRunInference}
+                disabled={!customFilename.trim()}
+                className="py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-95 disabled:opacity-20 text-white font-bold rounded-xl text-xs uppercase tracking-wider shadow-lg transition-all cursor-pointer"
+              >
+                เริ่มแปลงเสียง
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showWizard && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-50 p-4">

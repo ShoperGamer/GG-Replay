@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import Waveform from '../components/Waveform';
 import * as Wails from '../../wailsjs/go/main/App'; 
 
 const SharePage: React.FC = () => {
@@ -7,7 +6,6 @@ const SharePage: React.FC = () => {
   const [separated, setSeparated] = useState<string[]>([]);
   const [aiCovers, setAiCovers] = useState<string[]>([]);
 
-  // สถานะจัดการเครื่องเล่นมีเดียความถี่เสียงตัวปัจจุบัน
   const [activePlay, setActivePlay] = useState<{ name: string, url: string } | null>(null);
 
   useEffect(() => {
@@ -53,7 +51,6 @@ const SharePage: React.FC = () => {
     }
   };
 
-  // เรียกใช้ฟังก์ชันเซฟไฟล์ดาวน์โหลดข้ามสะพานระบบ Go
   const handleDownloadFile = async (category: string, relPath: string) => {
     try {
       const res = await (Wails as any).DownloadFile(category, relPath);
@@ -82,7 +79,6 @@ const SharePage: React.FC = () => {
         <p className="text-slate-400 text-sm">ตรวจสอบ จัดการ และดาวน์โหลดไฟล์มีเดียทั้งหมดภายในคลังระบบโปรแกรม</p>
       </div>
 
-      {/* แผงควบคุมเครื่องเล่นกลางเมื่อคลิกเล่นไฟล์เสียง */}
       {activePlay && (
         <div className="glass-card p-4 rounded-2xl border border-indigo-500/20 bg-indigo-950/10 backdrop-blur shadow-2xl animate-fadeIn space-y-3">
           <div className="flex items-center justify-between">
@@ -97,17 +93,14 @@ const SharePage: React.FC = () => {
             </button>
           </div>
           <p className="text-sm text-white font-mono truncate">{activePlay.name}</p>
-          <div className="bg-slate-900/60 p-3 rounded-xl space-y-2">
-            <Waveform color="#6366f1" audioUrl={activePlay.url} />
-            <audio src={activePlay.url} controls autoPlay className="w-full h-8 opacity-90 accent-indigo-500" />
+          <div className="bg-slate-900/80 p-4 rounded-xl border border-white/10 shadow-inner">
+            <audio src={activePlay.url} controls autoPlay className="w-full h-10 accent-indigo-500 opacity-95" />
           </div>
         </div>
       )}
 
-      {/* โครงสร้างแยก 3 คอลลัมน์อิสระ */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
-        {/* ส่วนที่ 1: ไฟล์เพลงต้นฉบับ */}
         <div className="space-y-4">
           <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5 flex items-center gap-2">
             <span className="w-2.5 h-2.5 bg-blue-500 rounded-full shadow" />
@@ -123,7 +116,6 @@ const SharePage: React.FC = () => {
                   <button onClick={() => handlePlayFile("uploads", f, f)} className="p-1.5 bg-blue-500/10 hover:bg-blue-500 text-blue-400 hover:text-white rounded-lg cursor-pointer">
                     <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                   </button>
-                  {/* ปุ่มดาวน์โหลดไฟล์ต้นฉบับ */}
                   <button onClick={() => handleDownloadFile("uploads", f)} className="p-1.5 bg-cyan-500/10 hover:bg-cyan-500 text-cyan-400 hover:text-white rounded-lg cursor-pointer" title="ดาวน์โหลดไฟล์">
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                   </button>
@@ -136,7 +128,6 @@ const SharePage: React.FC = () => {
           </div>
         </div>
 
-        {/* ส่วนที่ 2: ไฟล์แยกเสียงสเตมส์ */}
         <div className="space-y-4">
           <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5 flex items-center gap-2">
             <span className="w-2.5 h-2.5 bg-indigo-500 rounded-full shadow" />
@@ -152,7 +143,6 @@ const SharePage: React.FC = () => {
                   <button onClick={() => handlePlayFile("outputs", `stems/${f}`, f)} className="p-1.5 bg-indigo-500/10 hover:bg-indigo-500 text-indigo-400 hover:text-white rounded-lg cursor-pointer">
                     <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                   </button>
-                  {/* ปุ่มดาวน์โหลดไฟล์คัดแยกสเตมส์ */}
                   <button onClick={() => handleDownloadFile("outputs", `stems/${f}`)} className="p-1.5 bg-cyan-500/10 hover:bg-cyan-500 text-cyan-400 hover:text-white rounded-lg cursor-pointer" title="ดาวน์โหลดไฟล์">
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                   </button>
@@ -165,7 +155,6 @@ const SharePage: React.FC = () => {
           </div>
         </div>
 
-        {/* ส่วนที่ 3: ไฟล์ผลลัพธ์ AI Cover */}
         <div className="space-y-4">
           <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5 flex items-center gap-2">
             <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full shadow" />
@@ -181,7 +170,6 @@ const SharePage: React.FC = () => {
                   <button onClick={() => handlePlayFile("outputs", f, f)} className="p-1.5 bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-white rounded-lg cursor-pointer">
                     <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                   </button>
-                  {/* ปุ่มดาวน์โหลดไฟล์คัฟเวอร์สมบูรณ์ */}
                   <button onClick={() => handleDownloadFile("outputs", f)} className="p-1.5 bg-cyan-500/10 hover:bg-cyan-500 text-cyan-400 hover:text-white rounded-lg cursor-pointer" title="ดาวน์โหลดไฟล์">
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                   </button>
