@@ -1,249 +1,245 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import * as Wails from '../../wailsjs/go/main/App'; 
 
-interface SongOptions {
-  pitch: number;
-  instrumentalsPitch: number;
-  preStemmed: boolean;
-  vocalsOnly: boolean;
-  sampleMode: boolean;
-  deEchoDeReverb: boolean;
-  sampleModeStartTime: number;
-  f0Method: string;
-  stemmingMethod: string;
-  indexRatio: number;
-  consonantProtection: number;
-  outputFormat: string;
-  volumeEnvelope: number;
-  outputName: string;
+type DemucsModel = 'htdemucs_ft' | 'htdemucs' | 'htdemucs_6s' | 'hdemucs_mmi';
+
+interface DemucsJob {
+  id: string;
+  trackName: string;
+  status: 'queued' | 'processing' | 'completed' | 'errored';
+  progress: number;
+  message: string;
+  stems?: {
+    vocals?: string;
+    drums?: string;
+    bass?: string;
+    other?: string;
+  };
 }
 
-const DemucsPage: React.FC = () => {
-  const [audioFile, setAudioFile] = useState<{name: string, path: string} | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [statusMessage, setStatusMessage] = useState('');
-  
-  const [stemmingMethod, setStemmingMethod] = useState('UVR-MDX-NET Voc FT');
-  
-  const [vocalsFile, setVocalsFile] = useState<{name: string, streamUrl: string, fullPath: string} | null>(null);
-  const [instrumentsFile, setInstrumentsFile] = useState<{name: string, streamUrl: string, fullPath: string} | null>(null);
+const DEMUCS_MODELS: { value: DemucsModel; label: string; desc: string }[] = [
+  { value: 'htdemucs_ft', label: 'HTDemucs FT (แนะนำ)', desc: 'คุณภาพดีที่สุด ผ่านการ Fine-tuned ระดับสตูดิโอ' },
+  { value: 'htdemucs', label: 'HTDemucs', desc: 'Hybrid Transformer Demucs ความเร็วมาตรฐาน' },
+  { value: 'htdemucs_6s', label: 'HTDemucs 6S', desc: 'แยกละเอียด 6 Stems (เพิ่มเลเยอร์ Piano และ Guitar)' },
+  { value: 'hdemucs_mmi', label: 'HDemucs MMI', desc: 'โมเดลเสถียรรุ่นดั้งเดิม' },
+];
 
-  const handleSelectAudio = async () => {
+export default function DemucsPage() {
+  const [activeDevice, setActiveDevice] = useState('cpu');
+  const [deviceLoading, setDeviceLoading] = useState(true);
+  const [selectedFile, setSelectedFile] = useState<{name: string, path: string} | null>(null);
+  const [selectedModel, setSelectedModel] = useState<DemucsModel>('htdemucs_ft');
+  const [jobs, setJobs] = useState<DemucsJob[]>([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const deviceLabel: Record<string, string> = {
+    cpu: '🐢 CPU RENDER (ช้า)',
+    cuda: '🚀 NVIDIA GPU (CUDA Acceleration)',
+    mps: '🍎 Apple Silicon (MPS)',
+  };
+
+  // 🔥 ซิงค์ค่าการเลือกฮาร์ดแวร์โดยตรงจากโมดูลของคู่หน้าหลักทันทีเมื่อเปิดหน้าจอ
+  useEffect(() => {
+    const fetchDevice = async () => {
+      try {
+        const savedDevice = await (Wails as any).GetDeviceSetting();
+        setActiveDevice(savedDevice || 'cpu');
+      } catch (err) {
+        console.warn('Fallback to cpu:', err);
+        setActiveDevice('cpu');
+      } finally {
+        setDeviceLoading(false);
+      }
+    };
+    fetchDevice();
+
+    return () => {
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    };
+  }, []);
+
+  const handleSelectFile = async () => {
     try {
       const res = await Wails.SelectAndSaveAudio();
-      if (res && res.name) {
-        const streamUrl = await (Wails as any).GetAudioUrl(res.name, "uploads");
-        setAudioFile({ name: res.name, path: streamUrl });
-        setVocalsFile(null);
-        setInstrumentsFile(null);
+      if (res && res.name && res.path) {
+        setSelectedFile({ name: res.name, path: res.path });
       }
     } catch (err) {
-      alert("เกิดข้อผิดพลาดในการเลือกไฟล์เพลง");
+      console.error(err);
     }
   };
 
-  const handleProcess = async () => {
-    if (!audioFile) return alert("กรุณาเลือกไฟล์เพลงที่ต้องการแยกเสียงก่อน");
-    
+  const handleStartSeparation = async () => {
+    if (!selectedFile) return alert('กรุณาเลือกไฟล์เสียงก่อนครับ');
+
     setIsProcessing(true);
-    setProgress(0);
-    setStatusMessage('กำลังเริ่มต้นระบบคัดแยกเลเยอร์เสียง...');
-
     try {
-      const baseName = audioFile.name.replace(/\.[^/.]+$/, "");
+      const response = await (Wails as any).StartDemucsJob({
+        sourceAudioPath: selectedFile.path,
+        model: selectedModel,
+        device: activeDevice,
+      });
 
-      const options: SongOptions = {
-        pitch: 0,
-        instrumentalsPitch: 0,
-        preStemmed: false,
-        vocalsOnly: true, 
-        sampleMode: false,
-        deEchoDeReverb: false,
-        sampleModeStartTime: 0,
-        f0Method: "rmvpe",
-        stemmingMethod: stemmingMethod, 
-        indexRatio: 0.75,
-        consonantProtection: 0.35,
-        outputFormat: "wav",
-        volumeEnvelope: 1.0,
-        outputName: baseName
+      const newJob: DemucsJob = {
+        id: response.jobId,
+        trackName: selectedFile.name.replace(/\.[^/.]+$/, ''),
+        status: 'queued',
+        progress: 0,
+        message: 'รอคิวระบบประมวลผล...',
       };
 
-      const jobId = await Wails.CreateSong("none_model", audioFile.name, options);
-      if (!jobId) throw new Error("ไม่สามารถเริ่มส่งงานเข้าสายพานได้");
-
-      const interval = setInterval(async () => {
-        const jobStatus: any = await Wails.GetJobProgress(jobId);
-        
-        if (jobStatus) {
-           if (jobStatus.message) setStatusMessage(jobStatus.message);
-           
-           if (jobStatus.progress !== undefined) {
-             setProgress(Math.round(jobStatus.progress));
-           } else if (jobStatus.status === 'processing') {
-             setProgress(prev => (prev < 95 ? prev + 2 : prev));
-           }
-           
-           if (jobStatus.status === 'success' || jobStatus.status === 'completed') {
-             clearInterval(interval);
-             setIsProcessing(false);
-             setProgress(100);
-             
-             if (jobStatus.originalVocalsPath && jobStatus.instrumentalsPath) {
-                const vocalsUrl = await (Wails as any).GetAudioUrlByFullPath(jobStatus.originalVocalsPath);
-                const instUrl = await (Wails as any).GetAudioUrlByFullPath(jobStatus.instrumentalsPath);
-                
-                setVocalsFile({ 
-                  name: stemmingMethod.includes("Kim") ? "vocals.wav (เหลือเฉพาะเสียงร้องหลัก)" : "vocals.wav (เสียงร้องรวม)", 
-                  streamUrl: vocalsUrl, 
-                  fullPath: jobStatus.originalVocalsPath 
-                });
-                setInstrumentsFile({ 
-                  name: stemmingMethod.includes("Kim") ? "no_vocals.wav (ดนตรี + เสียงประสาน)" : "no_vocals.wav (ดนตรีเปล่า)", 
-                  streamUrl: instUrl, 
-                  fullPath: jobStatus.instrumentalsPath 
-                });
-             }
-             alert("คัดแยกเลเยอร์เสียงเพลงเสร็จสมบูรณ์!");
-           } else if (jobStatus.status === 'failed' || jobStatus.status === 'errored') {
-             clearInterval(interval);
-             setIsProcessing(false);
-             alert("การประมวลผลล้มเหลว: " + (jobStatus.error || "Unknown Error"));
-           }
-        }
-      }, 1500);
-
+      setJobs(prev => [newJob, ...prev]);
+      startPolling(response.jobId);
     } catch (err) {
+      alert('เกิดข้อผิดพลาด: ' + err);
+    } finally {
       setIsProcessing(false);
-      alert("Error: " + err);
     }
   };
 
-  const handleDownloadFile = async (fullPath: string, defaultName: string) => {
+  const startPolling = (jobId: string) => {
+    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+
+    pollIntervalRef.current = setInterval(async () => {
+      try {
+        const progressData = await (Wails as any).GetDemucsProgress(jobId);
+        if (!progressData) return;
+
+        setJobs(prev =>
+          prev.map(j =>
+            j.id === jobId
+              ? {
+                  ...j,
+                  status: progressData.status,
+                  progress: progressData.progress || 0,
+                  message: progressData.message,
+                  stems: progressData.stems,
+                }
+              : j
+          )
+        );
+
+        if (progressData.status === 'completed' || progressData.status === 'errored') {
+          if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+          }
+          if (progressData.status === 'completed') {
+            alert('AI คัดแยกเลเยอร์เสียงดนตรี Demucs เสร็จสมบูรณ์แล้ว!');
+          }
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }, 1200);
+  };
+
+  const handleSaveStemFile = async (fullPath: string, stemName: string) => {
     try {
-      const res = await (Wails as any).SaveFileAs(fullPath, defaultName);
+      const res = await (Wails as any).SaveFileAs(fullPath, `${stemName}.wav`);
       if (res && res.status === "success") {
-        alert(`บันทึกไฟล์ดาวน์โหลดสำเร็จที่ตำแหน่ง:\n${res.path}`);
+        alert(`บันทึกแทร็ก ${stemName} สำเร็จแล้วที่:\n${res.path}`);
       }
     } catch (err) {
-      alert("เกิดข้อผิดพลาดในการบันทึกไฟล์");
+      alert("ไม่สามารถบันทึกไฟล์ได้");
     }
   };
 
   return (
     <div className="max-w-5xl mx-auto space-y-8 animate-fadeIn text-slate-200 p-4">
-      <header className="mb-6">
-        <h2 className="text-3xl font-black text-white uppercase tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
-          UVR Stem Splitter Studio
-        </h2>
-        <p className="text-slate-400 text-sm">แยกเสียงร้องและดนตรีออกจากกัน พร้อมโหมดแก้ทางลบเสียงประสานหลายคน</p>
-      </header>
-
-      <div className="glass-card p-6 rounded-3xl border border-white/5 bg-slate-950/20 backdrop-blur shadow-2xl space-y-4">
-        
-        <div className="bg-slate-900/60 p-4 rounded-xl border border-white/5 flex flex-col space-y-2">
-          <label className="text-xs font-bold text-indigo-400 uppercase tracking-widest">Stemming Model Method (โหมดแยกไฟล์เสียง)</label>
-          <select 
-            value={stemmingMethod} 
-            onChange={(e) => setStemmingMethod(e.target.value)}
-            className="w-full bg-slate-950 text-sm font-medium text-slate-200 border border-white/10 p-3 rounded-xl outline-none cursor-pointer"
-          >
-            <optgroup label="โมเดลสกัดเสียง (Vocal Isolation)">
-              <option value="UVR-MDX-NET Voc FT">UVR-MDX-NET Voc FT (โหมดดั้งเดิมยอดนิยม)</option>
-              <option value="Kim_Vocal_1">Kim_Vocal_1 (โหมดพิเศษ: ดึงเฉพาะเสียงหลัก ลบเสียงประสานคอรัสออก)</option>
-            </optgroup>
-          </select>
+      <div className="flex flex-col sm:flex-row items-center justify-between mb-6 pb-4 border-b border-white/5">
+        <div>
+          <h2 className="text-3xl font-black text-white uppercase tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
+            UVR Meta-Demucs Splitter
+          </h2>
+          <p className="text-slate-400 text-sm">แยกส่วนประกอบเพลงออกเป็น 4-6 ไลน์เครื่องดนตรีอิสระผ่านขุมพลังคำนวณตรง</p>
         </div>
-
-        <div className="flex flex-col md:flex-row gap-4 items-center">
-           <button 
-             disabled={isProcessing}
-             onClick={handleSelectAudio}
-             className="w-full md:w-auto px-6 py-3.5 bg-slate-900 hover:bg-slate-800 border border-white/10 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-30"
-           >
-              <svg className="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path></svg>
-              เลือกไฟล์เพลงมิกซ์
-           </button>
-           {audioFile ? (
-             <span className="text-white font-mono bg-indigo-500/10 border border-indigo-500/20 px-4 py-2.5 rounded-xl flex-1 truncate text-sm">
-                🎵 {audioFile.name}
-             </span>
-           ) : (
-             <span className="text-slate-500 text-sm italic pl-2">ยังไม่ได้เลือกไฟล์เพลง...</span>
-           )}
+        <div className={`mt-4 sm:mt-0 flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold border ${
+          activeDevice === 'cuda' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+        }`}>
+          {deviceLoading ? '🔄 Syncing Hardware...' : deviceLabel[activeDevice]}
         </div>
+      </div>
 
-        {audioFile && !vocalsFile && (
-          <div className="p-4 bg-slate-900/40 rounded-2xl border border-white/5 animate-fadeIn">
-            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Original Track Preview</p>
-            <div className="bg-slate-900/80 p-4 rounded-2xl border border-white/10 shadow-inner">
-              <audio src={audioFile.path} controls className="w-full h-10 accent-indigo-500 opacity-95" />
-            </div>
+      <div className="glass-card p-6 rounded-3xl border border-white/5 bg-slate-950/20 backdrop-blur shadow-2xl space-y-5">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-bold text-indigo-400 uppercase tracking-widest mb-2">เลือกไฟล์เพลงเป้าหมาย</label>
+            <button
+              onClick={handleSelectFile}
+              className="w-full px-4 py-3.5 bg-slate-900 hover:bg-slate-800/80 border border-white/10 rounded-xl text-left truncate text-sm text-slate-300 cursor-pointer transition-all"
+            >
+              {selectedFile ? `✓ ${selectedFile.name}` : 'คลิกเลือกไฟล์เสียงคอมพิวเตอร์...'}
+            </button>
           </div>
-        )}
 
-        <button 
-          onClick={handleProcess}
-          disabled={!audioFile || isProcessing}
-          className="w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-95 text-white rounded-2xl font-black shadow-xl shadow-indigo-900/30 disabled:opacity-20 disabled:cursor-not-allowed transition-all active:scale-[0.99] text-sm tracking-widest uppercase"
+          <div>
+            <label className="block text-xs font-bold text-indigo-400 uppercase tracking-widest mb-2">สถาปัตยกรรมโมเดล AI</label>
+            <select
+              value={selectedModel}
+              onChange={e => setSelectedModel(e.target.value as DemucsModel)}
+              className="w-full px-4 py-3.5 bg-slate-900 border border-white/10 rounded-xl text-sm outline-none text-slate-200 cursor-pointer"
+            >
+              {DEMUCS_MODELS.map(m => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+            <p className="text-[11px] text-slate-500 mt-1.5 pl-1">
+              {DEMUCS_MODELS.find(m => m.value === selectedModel)?.desc}
+            </p>
+          </div>
+        </div>
+
+        <button
+          onClick={handleStartSeparation}
+          disabled={!selectedFile || isProcessing || deviceLoading}
+          className="w-full py-4 bg-gradient-to-r from-purple-600 to-indigo-600 hover:opacity-95 disabled:opacity-20 rounded-2xl font-black text-xs tracking-widest uppercase shadow-xl transition-all active:scale-[0.99] cursor-pointer"
         >
-          {isProcessing ? (
-            <span className="flex items-center gap-2 justify-center">
-               <svg className="animate-spin h-5 w-5 text-white" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-               {statusMessage} ({progress}%)
-            </span>
-          ) : "START STEM SEPARATION"}
+          {isProcessing ? '⏳กำลังจัดส่งงานเข้าสู่ระเบียบคิว...' : '🚀 เริ่มต้นคัดแยกแทร็กเสียง'}
         </button>
 
-        {(vocalsFile || instrumentsFile) && (
-          <div className="space-y-6 pt-4 border-t border-white/5 animate-fadeIn">
-            
-            {vocalsFile && (
-              <div className="p-4 bg-indigo-950/10 rounded-2xl border border-indigo-500/20">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-3 gap-2">
-                  <h4 className="text-indigo-400 font-bold text-xs uppercase tracking-widest flex items-center gap-2">
-                    🎤 {vocalsFile.name}
-                  </h4>
-                  <button 
-                    onClick={() => handleDownloadFile(vocalsFile.fullPath, "clean_lead_vocals.wav")}
-                    className="flex items-center justify-center gap-1.5 px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-lg shadow transition-all cursor-pointer w-full sm:w-auto"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                    ดาวน์โหลดไฟล์เสียงร้องนำ (.WAV)
-                  </button>
+        <div className="space-y-4 pt-2">
+          {jobs.map(job => (
+            <div key={job.id} className="p-5 bg-slate-900/60 rounded-2xl border border-white/5 space-y-3 shadow-lg animate-fadeIn">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h3 className="text-sm font-bold text-white">🎵 {job.trackName}</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">{job.message}</p>
                 </div>
-                <div className="bg-slate-900/80 p-4 rounded-xl border border-white/10 shadow-inner">
-                   <audio src={vocalsFile.streamUrl} controls className="w-full h-10 accent-indigo-500 opacity-95" />
-                </div>
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                  job.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400' :
+                  job.status === 'errored' ? 'bg-red-500/20 text-red-400' :
+                  job.status === 'processing' ? 'bg-blue-500/20 text-blue-400' : 'bg-slate-800 text-slate-400'
+                }`}>
+                  {job.status}
+                </span>
               </div>
-            )}
-            
-            {instrumentsFile && (
-              <div className="p-4 bg-purple-950/10 rounded-2xl border border-purple-500/20">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-3 gap-2">
-                  <h4 className="text-purple-400 font-bold text-xs uppercase tracking-widest flex items-center gap-2">
-                    🎸 {instrumentsFile.name}
-                  </h4>
-                  <button 
-                    onClick={() => handleDownloadFile(instrumentsFile.fullPath, "backing_tracks_with_harmonies.wav")}
-                    className="flex items-center justify-center gap-1.5 px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs rounded-lg shadow transition-all cursor-pointer w-full sm:w-auto"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                    ดาวน์โหลดไฟล์ดนตรี+เสียงประสาน (.WAV)
-                  </button>
-                </div>
-                <div className="bg-slate-900/80 p-4 rounded-xl border border-white/10 shadow-inner">
-                   <audio src={instrumentsFile.streamUrl} controls className="w-full h-10 accent-purple-500 opacity-95" />
-                </div>
-              </div>
-            )}
 
-          </div>
-        )}
+              <div className="w-full bg-slate-950 rounded-full h-1.5 overflow-hidden">
+                <div 
+                  className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-all duration-500"
+                  style={{ width: `${job.progress}%` }}
+                />
+              </div>
+
+              {job.status === 'completed' && job.stems && (
+                <div className="pt-2 grid grid-cols-2 sm:grid-cols-4 gap-2.5 animate-fadeIn">
+                  {Object.entries(job.stems).map(([name, path]) => (
+                    <button
+                      key={name}
+                      onClick={() => handleSaveStemFile(path, `${job.trackName}_${name}`)}
+                      className="px-3 py-2 bg-slate-950/60 hover:bg-slate-800 border border-white/5 hover:border-indigo-500/30 rounded-xl text-xs font-bold text-slate-300 transition-all cursor-pointer truncate text-left flex items-center gap-1.5"
+                    >
+                      <span>📥</span> <span className="capitalize">{name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
-};
-
-export default DemucsPage;
+}

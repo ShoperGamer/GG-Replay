@@ -4,6 +4,11 @@ from functools import lru_cache
 from threading import Lock
 from typing import Callable
 
+# === [แก้ไขเพิ่มเติม]: เพิ่มโมดูลตรวจสอบและสลับอุปกรณ์ประมวลผลแบบไดนามิก ===
+import torch
+from inference.config import config
+# ====================================================================
+
 from inference.inference_conf import stemming_models_list
 from inference.uvr.constants import DEMUCS_ARCH_TYPE, MDX_ARCH_TYPE, NO_OTHER_STEM, VR_ARCH_TYPE
 from inference.uvr.model_data import ModelData
@@ -74,9 +79,15 @@ class Stemmer:
         weights_dir: str,
         model_name: str = "UVR-MDX-NET Voc FT",
         status_setter: Callable[[str], None] = None,
+        device: str = None, 
     ):
         if not os.path.exists(source_audio_path):
             raise Exception(f"Source audio path does not exist: {source_audio_path}")
+        
+        # 🚀 === [แก้ไขเพิ่มเติม]: ดักจับชื่อโหมดท่อส่งรวม และเปลี่ยนไปอ้างอิงโมเดลแยกเสียงร้องมาตรฐานเพื่อป้องกันการแครช ===
+        if model_name == "Absolute_Lead_Isolation":
+            model_name = "UVR-MDX-NET Voc FT"
+
         track_filename = os.path.basename(source_audio_path)
         track_name = os.path.splitext(track_filename)[0]
         
@@ -98,7 +109,7 @@ class Stemmer:
                     model = m
                     break
                     
-        # --- 3. [ระบบยัดไส้โมเดลอัจฉริยะ (Force Bypass)]: หากเป็น Kim ให้เสกตัวแปรขึ้นมาเลยแบบไร้เงื่อนไขจุกจิก ---
+        # --- 3. [ระบบยัดไส้โมเดลอัจฉริยะ (Force Bypass)]: ตรวจจับคีย์เวิร์ดเพื่อเสกโครงสร้าง Onnx แฝง ---
         if model is None:
             class AutoMockModel:
                 def __init__(self, name, f_type, files):
@@ -106,12 +117,21 @@ class Stemmer:
                     self.type = f_type
                     self.files = files
             
-            # ถ้าชื่อมีคำว่า kim แม้แต่นิดเดียว ให้รัน Kim_Vocal_1.onnx ทันที
+            # เผื่อเลือกใช้โมเดลตระกูล Kim
             if "kim" in model_name.lower():
                 model = AutoMockModel("Kim_Vocal_1", MDX_ARCH_TYPE, ["Kim_Vocal_1.onnx"])
                 print("=== [Replay AI Patched]: Force loading Kim_Vocal_1.onnx into MDX-Net architecture ===")
             
-            # เผื่อโมเดลตัวอื่นในอนาคตที่ไม่มีใน Config แต่มีไฟล์ .onnx วางอยู่ในเครื่อง
+            # ดักจับคีย์เวิร์ด Karaoke เพื่อบังคับใช้เครื่องยนต์แยกคนร้องหลักออกจากคนร้องเสริม
+            elif "karaoke" in model_name.lower() or "kara_2" in model_name.lower():
+                model = AutoMockModel("UVR-MDX-NET Karaoke 2", MDX_ARCH_TYPE, ["UVR_MDXNET_KARA_2.onnx"])
+                print("=== [Replay AI Patched]: Force loading UVR_MDXNET_KARA_2.onnx for Lead Vocal Isolation ===")
+            
+            # ดักจับคีย์เวิร์ด Main เพื่อใช้เครื่องยนต์สลัดเสียงคนร้องคู่ออกเมื่อร้องพร้อมกันสองคน
+            elif "main" in model_name.lower() or "uvr_mdxnet_main" in model_name.lower():
+                model = AutoMockModel("UVR-MDX-NET Main", MDX_ARCH_TYPE, ["UVR_MDXNET_Main.onnx"])
+                print("=== [Replay AI Patched]: Force loading UVR_MDXNET_Main.onnx for Overlapping Duet Elimination ===")
+            
             else:
                 potential_file = f"{model_name}.onnx"
                 if os.path.exists(os.path.join(weights_dir, potential_file)):
@@ -131,7 +151,6 @@ class Stemmer:
         
         lock = Stemmer._get_lock(source_audio_path, output_directory)
         with lock:
-            # มั่นใจว่าโฟลเดอร์สำหรับเก็บโครงสร้างโมเดลถูกสร้างขึ้นแล้ว
             os.makedirs(weights_dir, exist_ok=True)
 
             # --- ระบบตรวจสอบและดาวน์โหลดโมเดลแยกเสียง UVR อัตโนมัติ ป้องกัน NoSuchFile ---
@@ -145,11 +164,9 @@ class Stemmer:
                     print(msg)
                     try:
                         import requests
-                        # ลิงก์ดาวน์โหลดหลักความเร็วสูงจากศูนย์เก็บข้อมูลโมเดลสากล TRvlvr
                         url = f"https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/{f_name}"
                         response = requests.get(url, stream=True)
                         
-                        # หากลิงก์หลักเกิดปัญหา ให้ใช้ลิงก์สำรองจาก HuggingFace Mirrors
                         if response.status_code != 200:
                             url = f"https://huggingface.co/Anjok/model-repo/resolve/main/{f_name}"
                             response = requests.get(url, stream=True)
@@ -176,7 +193,6 @@ class Stemmer:
 
             model_path = os.path.join(weights_dir, model.files[0])
             if len(model.files) > 1:
-                # demucs models download a yaml file that has all the information regarding the model
                 model_path = os.path.join(weights_dir, demucs_model_name_mapper(model_name))
             
             model_data: ModelData = ModelData(model_name, model_path=model_path, selected_process_method=model.type)
@@ -208,15 +224,39 @@ class Stemmer:
                 "write_to_console": write_to_console,
             }
 
-            start_time = time.time()
-            if model_data.process_method == VR_ARCH_TYPE:
-                seperator = SeparateVR(model_data, process_data)
-            if model_data.process_method == MDX_ARCH_TYPE:
-                seperator = SeparateMDX(model_data, process_data)
-            if model_data.process_method == DEMUCS_ARCH_TYPE:
-                seperator = SeparateDemucs(model_data, process_data)
+            orig_device = config.device
+            orig_providers = list(config.ort_providers) if hasattr(config, 'ort_providers') else ["CPUExecutionProvider"]
 
-            seperator.separate()
-            elapsed_time = time.time() - start_time
-            print(f"Separation complete. Elapsed time: {elapsed_time}")
-            return vocal_file, no_vocals_wav
+            if device:
+                dev_clean = device.lower()
+                if "cuda" in dev_clean or "gpu" in dev_clean:
+                    if torch.cuda.is_available():
+                        config.device = "cuda"
+                        config.ort_providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+                    else:
+                        config.device = "cpu"
+                        config.ort_providers = ["CPUExecutionProvider"]
+                elif "mps" in dev_clean:
+                    if torch.backends.mps.is_available():
+                        config.device = "mps"
+                        config.ort_providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+                    else:
+                        config.device = "cpu"
+                        config.ort_providers = ["CPUExecutionProvider"]
+                else:
+                    config.device = "cpu"
+                    config.ort_providers = ["CPUExecutionProvider"]
+
+            try:
+                if model_data.process_method == VR_ARCH_TYPE:
+                    seperator = SeparateVR(model_data, process_data)
+                if model_data.process_method == MDX_ARCH_TYPE:
+                    seperator = SeparateMDX(model_data, process_data)
+                if model_data.process_method == DEMUCS_ARCH_TYPE:
+                    seperator = SeparateDemucs(model_data, process_data)
+
+                seperator.separate()
+                return vocal_file, no_vocals_wav
+            finally:
+                config.device = orig_device
+                config.ort_providers = orig_providers

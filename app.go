@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -19,6 +20,7 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+// SongOptions โครงสร้างรับพารามิเตอร์การตั้งค่าแปลงเสียง RVC/UVR หน้าหลัก
 type SongOptions struct {
 	Pitch               int     `json:"pitch"`
 	InstrumentalsPitch  int     `json:"instrumentalsPitch"`
@@ -34,6 +36,8 @@ type SongOptions struct {
 	OutputFormat        string  `json:"outputFormat"`
 	VolumeEnvelope      float64 `json:"volumeEnvelope"`
 	OutputName          string  `json:"outputName"`
+	Device              string  `json:"device"` // 🎯 ปลดล็อกฟิลด์รับค่าตัวเลือกฮาร์ดแวร์อุปกรณ์จาก React UI
+	GPU                 bool    `json:"gpu"`    // 🎯 ปลดล็อกฟิลด์รับสถานะตรวจสอบการใช้งานการ์ดจอ GPU
 }
 
 type queueItem struct {
@@ -43,6 +47,32 @@ type queueItem struct {
 	opts      SongOptions
 }
 
+// ========== Demucs โครงสร้างข้อมูลสำหรับโมดูลแยกแทร็กอิสระ ==========
+type DemucsRequest struct {
+	SourceAudioPath string `json:"sourceAudioPath"`
+	Model           string `json:"model"`
+	Device          string `json:"device"`
+}
+
+type DemucsResponse struct {
+	JobId string `json:"jobId"`
+}
+
+type DemucsProgress struct {
+	Status   string            `json:"status"`
+	Message  string            `json:"message"`
+	Progress float64           `json:"progress"`
+	Stems    map[string]string `json:"stems,omitempty"`
+}
+
+type demucsJob struct {
+	ID        string
+	Request   DemucsRequest
+	Progress  DemucsProgress
+	StartedAt time.Time
+}
+
+// App แกนควบคุมหลักแอปพลิเคชันฝั่ง Go (Wails Framework)
 type App struct {
 	ctx          context.Context
 	pythonPort   string
@@ -53,18 +83,28 @@ type App struct {
 	jobsMutex   sync.RWMutex
 	runningJobs map[string]interface{}
 	jobQueue    chan queueItem
+
+	// 🎯 ฟิลด์ระบบจัดการคิวงานเบื้องหลังแยกส่วนสำหรับเครื่องยนต์ Meta-Demucs
+	demucsJobs    map[string]*demucsJob
+	demucsJobsMu  sync.RWMutex
+	demucsQueue   chan *demucsJob
 }
 
 func NewApp() *App {
 	port := "62362"
 	streamPort := "62363"
-	return &App{
+	app := &App{
 		pythonPort:   port,
 		pythonApiUrl: fmt.Sprintf("http://127.0.0.1:%s", port),
 		streamPort:   streamPort,
 		runningJobs:  make(map[string]interface{}),
 		jobQueue:     make(chan queueItem, 100),
+		demucsJobs:   make(map[string]*demucsJob),
+		demucsQueue:  make(chan *demucsJob, 100),
 	}
+	// เปิดระบบ Listener คอยดักสแตนด์บายรับงานประมวลผลฝั่ง Demucs ทันทีที่เปิดแอป
+	go app.demucsWorker()
+	return app
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -102,9 +142,19 @@ func (a *App) startup(ctx context.Context) {
 	go a.processQueueWorker()
 }
 
+// processQueueWorker คิวงานสับสายพานสำหรับการแปลงเสียง RVC/UVR ตัวหลัก
 func (a *App) processQueueWorker() {
 	for item := range a.jobQueue {
 		a.updateJobStatus(item.jobID, "processing", "Starting AI processing pipeline...")
+
+		// ตรวจสอบและบังคับล็อกค่าระบุฮาร์ดแวร์ (Device) ไว้ที่ Root Level ป้องกันค่าว่างหล่นหายไปหา Python
+		deviceSetting := item.opts.Device
+		if deviceSetting == "" {
+			deviceSetting = a.GetDeviceSetting()
+		}
+		if deviceSetting == "" {
+			deviceSetting = "cuda"
+		}
 
 		configData := map[string]interface{}{
 			"modelId":           item.modelName,
@@ -113,6 +163,7 @@ func (a *App) processQueueWorker() {
 			"songUrlOrFilePath": filepath.Join(a.appDataDir, "uploads", item.audioName),
 			"outputDirectory":   filepath.Join(a.appDataDir, "outputs"),
 			"options":           item.opts,
+			"device":            deviceSetting, // 🎯 ล็อกฮาร์ดแวร์ส่งตรงระดับ Root JSON Payload
 		}
 		configBytes, _ := json.Marshal(configData)
 		configPath := filepath.Join(os.TempDir(), fmt.Sprintf("job_%s.json", item.jobID))
@@ -126,8 +177,6 @@ func (a *App) processQueueWorker() {
 		cmd := exec.Command(pythonBin, scriptPath, "--config", configPath, "--job_id", item.jobID)
 		cmd.Dir = pythonDir
 		
-		deviceSetting := a.GetDeviceSetting()
-		if deviceSetting == "" { deviceSetting = "cuda" }
 		env := os.Environ()
 		if deviceSetting == "cpu" {
 			env = append(env, "CUDA_VISIBLE_DEVICES=")
@@ -220,6 +269,121 @@ func (a *App) GetJobProgress(jobId string) map[string]interface{} {
 	return map[string]interface{}{"status": "unknown_job", "message": "Error: Job not found"}
 }
 
+// ========== Demucs Bindings ฟังก์ชันระบบคิวและสั่งรัน Meta-Demucs แยกไลน์เสียง ==========
+func (a *App) StartDemucsJob(req DemucsRequest) (DemucsResponse, error) {
+	if req.SourceAudioPath == "" { return DemucsResponse{}, fmt.Errorf("source audio path required") }
+
+	jobId := fmt.Sprintf("demucs_%d", time.Now().UnixNano())
+	job := &demucsJob{
+		ID:        jobId,
+		Request:   req,
+		Progress:  DemucsProgress{Status: "queued", Message: "อยู่ในลำดับคิวระบบประมวลผล..."},
+		StartedAt: time.Now(),
+	}
+
+	a.demucsJobsMu.Lock()
+	a.demucsJobs[jobId] = job
+	a.demucsJobsMu.Unlock()
+
+	a.demucsQueue <- job
+	log.Printf("[Demucs Engine] Job enqueued successfully: %s (model=%s, device=%s)", jobId, req.Model, req.Device)
+	return DemucsResponse{JobId: jobId}, nil
+}
+
+func (a *App) GetDemucsProgress(jobId string) (DemucsProgress, error) {
+	a.demucsJobsMu.RLock()
+	defer a.demucsJobsMu.RUnlock()
+	if job, exists := a.demucsJobs[jobId]; exists { return job.Progress, nil }
+	return DemucsProgress{Status: "unknown", Message: "Job session expired"}, nil
+}
+
+func (a *App) demucsWorker() {
+	log.Println("[Demucs Queue Workers] Standalone worker channel listener turned on.")
+	for job := range a.demucsQueue {
+		a.runDemucsJob(job)
+	}
+}
+
+func (a *App) runDemucsJob(job *demucsJob) {
+	a.demucsJobsMu.Lock()
+	job.Progress.Status = "processing"
+	job.Progress.Message = "กำลังจัดสรรไดรเวอร์คำนวณฮาร์ดแวร์..."
+	a.demucsJobsMu.Unlock()
+
+	wd, _ := os.Getwd()
+	pythonBin := a.findPythonBinary(wd)
+	pythonDir := filepath.Join(wd, "python")
+
+	config := map[string]interface{}{
+		"job_id":            job.ID,
+		"source_audio_path": job.Request.SourceAudioPath,
+		"model":             job.Request.Model,
+		"device":            job.Request.Device,
+		"output_directory":  filepath.Join(a.appDataDir, "outputs", "demucs", job.ID),
+	}
+
+	configFile := filepath.Join(os.TempDir(), fmt.Sprintf("demucs_cfg_%s.json", job.ID))
+	configBytes, _ := json.Marshal(config)
+	_ = os.WriteFile(configFile, configBytes, 0644)
+	defer os.Remove(configFile)
+
+	cmd := exec.Command(pythonBin, "demucs_worker.py", "--config", configFile)
+	cmd.Dir = pythonDir
+	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
+
+	if runtime.GOOS == "windows" {
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	}
+
+	stdout, _ := cmd.StdoutPipe()
+	stderr, _ := cmd.StderrPipe()
+
+	if err := cmd.Start(); err != nil {
+		a.demucsJobsMu.Lock()
+		job.Progress.Status = "errored"
+		job.Progress.Message = "Failed to open Python sub-runtime: " + err.Error()
+		a.demucsJobsMu.Unlock()
+		return
+	}
+
+	// ท่อ Async คอยสตรีมสแกนเนอร์แกะบรรทัด JSON Progress สดส่งตรงหา React UI เรียลไทม์
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			line := scanner.Text()
+			var incomingProgress DemucsProgress
+			if err := json.Unmarshal([]byte(line), &incomingProgress); err == nil && incomingProgress.Status != "" {
+				a.demucsJobsMu.Lock()
+				job.Progress = incomingProgress
+				a.demucsJobsMu.Unlock()
+			} else {
+				log.Printf("[Demucs Worker STDOUT] %s", line)
+			}
+		}
+	}()
+
+	go func() {
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			log.Printf("[Demucs Worker STDERR] %s", scanner.Text())
+		}
+	}()
+
+	err := cmd.Wait()
+
+	a.demucsJobsMu.Lock()
+	defer a.demucsJobsMu.Unlock()
+	if err != nil {
+		job.Progress.Status = "errored"
+		job.Progress.Message = "Demucs processing crash or aborted."
+	} else if job.Progress.Status != "completed" {
+		job.Progress.Status = "completed"
+		job.Progress.Message = "เสร็จสมบูรณ์"
+		job.Progress.Progress = 100
+	}
+}
+
+// ========== ฟังก์ชันเครื่องมือจัดการมัลติมีเดียและไฟล์เสียงดั้งเดิมคงสภาพไว้ครบถ้วน ==========
 func (a *App) SaveDeviceSetting(device string) bool {
 	p := filepath.Join(a.appDataDir, "settings.json")
 	s := struct { Device string `json:"device"` }{Device: device}

@@ -1,5 +1,51 @@
 export namespace main {
 	
+	export class DemucsProgress {
+	    status: string;
+	    message: string;
+	    progress: number;
+	    stems?: Record<string, string>;
+	
+	    static createFrom(source: any = {}) {
+	        return new DemucsProgress(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.message = source["message"];
+	        this.progress = source["progress"];
+	        this.stems = source["stems"];
+	    }
+	}
+	export class DemucsRequest {
+	    sourceAudioPath: string;
+	    model: string;
+	    device: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DemucsRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sourceAudioPath = source["sourceAudioPath"];
+	        this.model = source["model"];
+	        this.device = source["device"];
+	    }
+	}
+	export class DemucsResponse {
+	    jobId: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DemucsResponse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.jobId = source["jobId"];
+	    }
+	}
 	export class SongOptions {
 	    pitch: number;
 	    instrumentalsPitch: number;
@@ -15,6 +61,8 @@ export namespace main {
 	    outputFormat: string;
 	    volumeEnvelope: number;
 	    outputName: string;
+	    device: string;
+	    gpu: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new SongOptions(source);
@@ -36,6 +84,8 @@ export namespace main {
 	        this.outputFormat = source["outputFormat"];
 	        this.volumeEnvelope = source["volumeEnvelope"];
 	        this.outputName = source["outputName"];
+	        this.device = source["device"];
+	        this.gpu = source["gpu"];
 	    }
 	}
 

@@ -1,9 +1,11 @@
 import gc
 import hashlib
+import json
 import logging
 import os
 import re
 import shutil
+import sys
 import threading
 import time
 import traceback
@@ -14,6 +16,26 @@ import numpy as np
 import torch
 from pydub import AudioSegment
 from scipy.io import wavfile
+
+# =====================================================================
+# 🎯 [ROBUST PATH FIX]: ป้องกัน ModuleNotFoundError บน Windows
+# =====================================================================
+_current_file = os.path.abspath(__file__)
+_current_dir = os.path.dirname(_current_file)          # .../python/inference
+_python_root = os.path.dirname(_current_dir)           # .../python
+_lib_root = os.path.join(_python_root, "lib")          # .../python/lib
+
+_paths_to_inject = [
+    _python_root,
+    _current_dir,
+    _lib_root,
+    os.path.join(_current_dir, "lib"),
+]
+
+for _p in _paths_to_inject:
+    if os.path.exists(_p) and _p not in sys.path:
+        sys.path.insert(0, _p)
+# =====================================================================
 
 from inference.api_models import CreateSongOptions, JobProgressResp, STATUS
 from inference.args import parse_args
@@ -76,26 +98,31 @@ class InferenceManager:
         self.source_audio_path: str = source_audio_path
         self.last_progress_resp: Optional[JobProgressResp] = None
         self.status: STATUS = "processing"
-        self.set_status = set_status if set_status else lambda x: logger.info(x)
+        
+        # 🎯 [GO BRIDGE]: ใช้ JSON stdout printer ถ้าไม่มี callback ส่งมา
+        self.set_status = set_status if set_status else self._default_json_status_printer
         self.check_stop_job = check_stop_job if check_stop_job else lambda: False
         self.run_thread: Optional[threading.Thread] = None
+        
+        # ตัวแปรสำหรับจัดการไฟล์เสียง
         self.instrumentals_file: Optional[str] = None
         self.vocals_file: Optional[str] = None
         self.pre_deecho_vocals_file: Optional[str] = None
         self.converted_vocals_file = None
+        self.garbage_files = [] # รายการไฟล์ขยะที่จะถูกล้างทิ้งตอนจบ
+        
         self.model = None
         self.job_id = job_id
         self.originals_file = None
         self.joined_track = None
 
-        # 🎯 [ระบบสกัดชื่อไฟล์แบบไดนามิก]: ดักจับค่าชื่อไฟล์ที่ส่งมาจากออปชันหน้าบ้าน
+        # รองรับฟีเจอร์ตั้งชื่อไฟล์ผ่าน Popup จาก Frontend
         self.output_name = "converted_vocals"
         if options and hasattr(options, 'outputName') and options.outputName:
             self.output_name = options.outputName
         elif job_id:
             try:
                 import tempfile
-                import json
                 temp_config_path = os.path.join(tempfile.gettempdir(), f"job_{job_id}.json")
                 if os.path.exists(temp_config_path):
                     with open(temp_config_path, "r", encoding="utf-8") as f:
@@ -128,14 +155,17 @@ class InferenceManager:
         self.model_name = model_name
         self.models_path = models_path
         self.weights_path = weights_path
-        self.output_directory = os.path.join(output_directory, job_id)
+        self.output_directory = os.path.join(output_directory, job_id) if job_id else output_directory
         
         os.makedirs(self.output_directory, exist_ok=True)
-        self.stems_directory = os.path.join(output_directory, "stems")
-        self.yt_cache = os.path.join(output_directory, "yt-cache")
+        self.stems_directory = os.path.join(self.output_directory, "stems")
+        self.yt_cache = os.path.join(self.output_directory, "yt-cache")
+        self.originals_directory = os.path.join(self.output_directory, "originals")
 
-        self.originals_directory = os.path.join(output_directory, "originals")
-        if os.path.exists(source_audio_path):
+        # 🧹 ระบบเคลียร์แคชก่อนเริ่มงาน (ล้างไฟล์เก่าทิ้ง ป้องกันบั๊กทับซ้อน)
+        self.clear_old_cache_before_start()
+
+        if source_audio_path and os.path.exists(source_audio_path):
             self.set_track_values(source_audio_path)
 
         logger.info(f"Model name: {self.model_name}")
@@ -149,6 +179,102 @@ class InferenceManager:
         self.error: Optional[Exception] = None
         self.remaining_seconds = None
         self.output_filepath = None
+
+    # =====================================================================
+    # 🎯 JSON Status Printer - สำหรับ Go bridge ดักจับ stdout
+    # =====================================================================
+    def _default_json_status_printer(self, status: JobProgressResp):
+        """พิมพ์ JSON progress ออก stdout ให้ Go ดักจับแบบ real-time"""
+        try:
+            if hasattr(status, 'model_dump'):
+                data = status.model_dump()
+            elif hasattr(status, 'dict'):
+                data = status.dict()
+            else:
+                data = status.__dict__
+            json_line = json.dumps(data, ensure_ascii=False, default=str)
+            print(f"PROGRESS_JSON:{json_line}", flush=True)
+        except Exception as e:
+            logger.error(f"Failed to serialize status: {e}")
+            logger.info(f"Status: {getattr(status, 'message', 'unknown')}")
+
+    def clear_old_cache_before_start(self):
+        """ ล้างโฟลเดอร์ Stems เก่าทิ้ง สร้างใหม่เพื่อความสะอาดก่อนรัน """
+        try:
+            if os.path.exists(self.stems_directory):
+                shutil.rmtree(self.stems_directory, ignore_errors=True)
+            os.makedirs(self.stems_directory, exist_ok=True)
+        except Exception as e:
+            logger.warning(f"Could not clear old stems cache: {e}")
+
+    def clear_garbage_cache(self):
+        """ ล้างไฟล์ขยะระหว่างทางเพื่อคืนพื้นที่ว่างหลังแปลงไฟล์เสร็จ """
+        logger.info("🧹 Clearing intermediate garbage cache files...")
+        for filepath in self.garbage_files:
+            if filepath and os.path.exists(filepath):
+                try:
+                    os.remove(filepath)
+                except Exception as e:
+                    logger.debug(f"Failed to remove cache file {filepath}: {e}")
+        
+        # ลบโฟลเดอร์ก๊อปปี้ตอนล้างเสียงสะท้อน
+        copies_dir = os.path.join(self.stems_directory, "vocals_copies")
+        if os.path.exists(copies_dir):
+            shutil.rmtree(copies_dir, ignore_errors=True)
+
+    def _sync_global_hardware(self):
+        """ ระบบล็อกและสลับอุปกรณ์ประมวลผล (CPU/GPU) """
+        from inference.config import config
+
+        target_device = None
+        if hasattr(self, 'options') and self.options:
+            if hasattr(self.options, 'device') and self.options.device:
+                target_device = str(self.options.device).strip().lower()
+            elif hasattr(self.options, 'gpu'):
+                target_device = "cuda" if self.options.gpu else "cpu"
+
+        # 🎯 [GO BRIDGE]: อ่านจาก environment variable (ที่ Go set ไว้)
+        if not target_device:
+            env_device = os.environ.get("PYTORCH_DEVICE", "")
+            if env_device:
+                target_device = env_device.strip().lower()
+
+        if not target_device:
+            try:
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                settings_path = os.path.abspath(os.path.join(base_dir, "..", "data", "settings.json"))
+                if not os.path.exists(settings_path):
+                    settings_path = os.path.abspath(os.path.join(base_dir, "data", "settings.json"))
+                
+                if os.path.exists(settings_path):
+                    with open(settings_path, "r", encoding="utf-8") as f:
+                        settings = json.load(f)
+                        settings_device = settings.get("device")
+                        if settings_device:
+                            target_device = str(settings_device).strip().lower()
+            except Exception as e:
+                logger.warning(f"[Hardware Sync] Cannot read settings.json dynamically: {e}")
+
+        if not target_device:
+            target_device = "cpu"
+
+        if ("cuda" in target_device or "gpu" in target_device) and torch.cuda.is_available():
+            config.device = "cuda"
+            config.is_half = True
+            if "CUDAExecutionProvider" not in getattr(config, 'ort_providers', []):
+                config.ort_providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            logger.info("[Hardware Sync] Dynamic global switch: LOCKED to GPU (CUDA) for all tasks.")
+        elif "mps" in target_device and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            config.device = "mps"
+            config.is_half = False
+            if "CoreMLExecutionProvider" not in getattr(config, 'ort_providers', []):
+                config.ort_providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+            logger.info("[Hardware Sync] Dynamic global switch: LOCKED to Apple Silicon (MPS) for all tasks.")
+        else:
+            config.device = "cpu"
+            config.is_half = False
+            config.ort_providers = ["CPUExecutionProvider"]
+            logger.info("[Hardware Sync] Dynamic global switch: LOCKED to CPU for all tasks.")
 
     def find_model(self, models_path: str, model_name: str):
         from inference.rvc_model import RVCModel
@@ -184,17 +310,24 @@ class InferenceManager:
             def update_status(msg):
                 self.check_and_update_status(f"Separating track... {msg}")
 
-            self.vocals_file, self.instrumentals_file = Stemmer.separate_track(
+            from inference.config import config
+            target_device = config.device
+
+            base_model = self.stemming_model
+            if base_model == "Absolute_Lead_Isolation":
+                base_model = "UVR-MDX-NET Voc FT"
+
+            # 🚀 Passที่ 1: แยกไฟล์ดนตรีและเสียงร้อง (ดนตรีออกมาก่อน)
+            self.instrumentals_file, self.vocals_file = Stemmer.separate_track(
                 self.source_audio_path,
                 self.stems_directory,
                 self.weights_path,
-                self.stemming_model,
+                base_model,
                 update_status,
+                device=target_device,
             )
-            elapsed_time = time.time() - start_time
-            logger.info(f"UVR: Separation complete. Elapsed time: {elapsed_time}")
             
-            # 🎯 [Advanced 2-Pass Sequential UVR]: ล้างเสียงก้องห้องและสลัดเสียงคอรัสประสาน/ฮัมเพลงเมื่อเปิด De-Echo
+            # 🚀 Passที่ 2: ล้างเสียงสะท้อน (De-Echo / De-Reverb)
             if self.options.deEchoDeReverb:
                 self.check_and_update_status("De-Echoing input file...")
                 
@@ -204,15 +337,9 @@ class InferenceManager:
                         hasher_vocals.update(chunk)
                 md5_vocals = hasher_vocals.hexdigest()
 
-                vocal_copies_dir = os.path.join(
-                    self.stems_directory,
-                    "vocals_copies",
-                )
+                vocal_copies_dir = os.path.join(self.stems_directory, "vocals_copies")
                 os.makedirs(vocal_copies_dir, exist_ok=True)
-                md5_vocals_file = os.path.join(
-                    vocal_copies_dir,
-                    f"{md5_vocals}.wav",
-                )
+                md5_vocals_file = os.path.join(vocal_copies_dir, f"{md5_vocals}.wav")
                 if not os.path.exists(md5_vocals_file):
                     shutil.copyfile(self.vocals_file, md5_vocals_file)
                 self.pre_deecho_vocals_file = self.vocals_file
@@ -220,31 +347,65 @@ class InferenceManager:
                 def update_status_deecho(msg):
                     self.check_and_update_status(f"De-echoing track... {msg}")
 
-                # 🚀 Pass ที่ 1: ล้างเสียงสะท้อน (Room Reverb Clean) ผ่าน FoxJoy
-                self.vocals_file, echo_and_reverb_file = Stemmer.separate_track(
+                # เสียงเอคโค่ส่วนเกิน (สลัดออก), เสียงร้องหลักที่ผ่านการคลีน
+                echo_and_reverb_file, self.vocals_file = Stemmer.separate_track(
                     md5_vocals_file,
                     self.stems_directory,
                     self.weights_path,
                     "UVR-DeEcho-DeReverb by FoxJoy",
                     update_status_deecho,
+                    device=target_device,
                 )
-                
-                # 🚀 Pass ที่ 2: ลบเสียงร้องคอรัส เสียงซ้อน และเสียงฮัมเพลงออกด้วย Kim_Vocal_1
-                self.check_and_update_status("Purifying Lead Vocals (Removing Harmonies, Overlaps & Humming)...")
-                
-                def update_status_purify(msg):
-                    self.check_and_update_status(f"Purifying Vocals... {msg}")
-                
-                self.vocals_file, backing_vocals_file = Stemmer.separate_track(
-                    self.vocals_file,
-                    self.stems_directory,
-                    self.weights_path,
-                    "Kim_Vocal_1", 
-                    update_status_purify,
-                )
+                self.garbage_files.append(echo_and_reverb_file) # เก็บลงถังขยะ
 
-                elapsed_time = time.time() - start_time
-                logger.info(f"Advanced Vocal Purification complete. Total elapsed time: {elapsed_time}")
+            # 🚀 Passที่ 3: ลบเศษดนตรีหลุดรอดด้วย Kim_Vocal_1 ตามลำดับที่ระบุ [self.vocals_file, instrumental_bleed]
+            self.check_and_update_status("Purifying Vocals (Removing Instrumental Bleeding)...")
+            def update_status_clean(msg):
+                self.check_and_update_status(f"Cleaning Instruments Bleed... {msg}")
+            
+            self.vocals_file, instrumental_bleed = Stemmer.separate_track(
+                self.vocals_file,
+                self.stems_directory,
+                self.weights_path,
+                "Kim_Vocal_1",
+                update_status_clean,
+                device=target_device,
+            )
+            self.garbage_files.append(instrumental_bleed) # เก็บลงถังขยะ
+
+            # 🚀 Passที่ 4: สลัดเสียงร้องคอรัส แบ็คกิ้งโวคอล ด้วย Karaoke 2
+            self.check_and_update_status("Isolating Lead Vocals (Removing Backing Vocals & Harmonies)...")
+            def update_status_karaoke(msg):
+                self.check_and_update_status(f"Isolating Main Lead Singer... {msg}")
+
+            backing_vocals_file, self.vocals_file = Stemmer.separate_track(
+                self.vocals_file,
+                self.stems_directory,
+                self.weights_path,
+                "UVR-MDX-NET Karaoke 2",
+                update_status_karaoke,
+                device=target_device,
+            )
+            self.garbage_files.append(backing_vocals_file) # เก็บลงถังขยะ
+
+            # 🚀 Passที่ 5: คัดเสียงร้องนำเดี่ยวขั้นเด็ดขาดด้วย UVR-MDX-NET Main
+            self.check_and_update_status("Isolating Absolute Single Lead Singer...")
+            def update_status_main(msg):
+                self.check_and_update_status(f"Purifying Single Vocalist... {msg}")
+
+            secondary_vocal_bleed, self.vocals_file = Stemmer.separate_track(
+                self.vocals_file,
+                self.stems_directory,
+                self.weights_path,
+                "UVR-MDX-NET Main",
+                update_status_main,
+                device=target_device,
+            )
+            self.garbage_files.append(secondary_vocal_bleed) # เก็บลงถังขยะ
+            self.garbage_files.append(self.vocals_file) # ไฟล์ร้องดิบใช้เสร็จแล้วเตรียมทิ้งตอนจบ
+
+            elapsed_time = time.time() - start_time
+            logger.info(f"Advanced Single Vocalist Purification complete. Total elapsed time: {elapsed_time}")
 
         logger.info("UVR: Track separation complete.")
         logger.info("---------------------------------")
@@ -291,7 +452,6 @@ class InferenceManager:
             )
             self.check_and_update_status("Creating audio files...")
             
-            # 🎯 [แก้ไขชื่อไฟล์ผลลัพธ์แบบไดนามิก]: ประกอบชื่อไฟล์ปลายทางตามค่าของ self.output_name
             ext = ".wav" if self.output_format == "wav" else ".mp3"
             output_file = f"{self.output_name}{ext}"
             
@@ -326,9 +486,22 @@ class InferenceManager:
             wavfile.write(temp_wav_path, tgt_sr, audio_opt)
             logger.info("---------------------------------")
             
-            logger.info("Exporting completed vocal track...")
+            logger.info("Loading converted vocal track...")
             vocal = AudioSegment.from_wav(temp_wav_path)
-            self.joined_track = vocal
+            
+            # 🚀 มิกซ์รวมเสียง: โหลดดนตรีเป็นฐานล่าง แล้วเอาเสียงร้อง (vocal) โปะทับไว้ด้านบนด้วย overlay
+            if not self.vocals_only and self.instrumentals_file and os.path.exists(self.instrumentals_file):
+                logger.info("Mixing converted vocals on top of original instrumentals...")
+                instrumental = AudioSegment.from_file(self.instrumentals_file)
+                
+                if self.instrumentals_pitch:
+                    instrumental = self.pitch_shift(instrumental, self.instrumentals_pitch)
+                
+                # โค้ดนี้ทำให้เสียงร้องอยู่บน เสียงดนตรีอยู่ล่าง (Background=Instrumental, Foreground=Vocal)
+                self.joined_track = instrumental.overlay(vocal)
+            else:
+                logger.info("Vocals only mode selected. Exporting vocals without instrumentals.")
+                self.joined_track = vocal
 
             logger.info("Writing completed file...")
             self.joined_track.export(joined_track_export, **parameters)
@@ -339,12 +512,15 @@ class InferenceManager:
             logger.info(f"Track successfully written to: {joined_track_export}")
             logger.info("---------------------------------")
             logger.info("Inference complete.")
+            
+            # ปล่อยแรม
             self.model.clearMemory()
             del self.model
             del audio_opt
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             gc.collect()
+
         except Exception as e:
             if self.status == "stopped":
                 self.check_and_update_status("Stopped")
@@ -380,6 +556,7 @@ class InferenceManager:
             modelId=self.model_name,
             songHash=self.track_md5,
             trackName=self.track_name,
+            jobId=self.job_id,  # 🎯 [GO BRIDGE]: เพิ่ม jobId สำหรับ Go bridge
         )
         self.set_status(progress_resp)
         self.last_progress_resp = progress_resp
@@ -403,6 +580,8 @@ class InferenceManager:
     def infer(self):
         start_time = time.time()
         try:
+            self._sync_global_hardware()
+
             self.check_and_update_status("Starting up...", "processing")
             self.check_deps()
             self.check_and_update_status("Dependencies checked")
@@ -419,8 +598,10 @@ class InferenceManager:
 
             self.check_and_update_status("Performing inference...")
             self.perform_inference()
+            
             if self.status != "stopped":
                 self.check_and_update_status("Completed", "completed")
+                
         except RuntimeError as e:
             traceback.print_exc()
             self.error = e
@@ -435,10 +616,69 @@ class InferenceManager:
             self.check_and_update_status("Error", "errored")
             traceback.print_exc()
         finally:
+            # ล้างไฟล์ขยะที่ไม่จำเป็นออกเมื่อเสร็จสิ้นการประมวลผล เพื่อคืนพื้นที่ให้ผู้ใช้
+            self.clear_garbage_cache()
+            
             if self.status == "processing":
                 self.check_and_update_status("Completed", "completed")
             elapsed_time = time.time() - start_time
             logger.info(f"Total elapsed time: {elapsed_time}")
+
+
+# =====================================================================
+# 🎯 Entry Points
+# =====================================================================
+def main_from_config():
+    """Run inference from JSON config file (called by Go subprocess)"""
+    if len(sys.argv) < 3 or sys.argv[1] != "--config":
+        print(
+            "Usage: python -m inference.inference_manager --config <config.json>",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    config_path = sys.argv[2]
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    except Exception as e:
+        print(f"Failed to load config file {config_path}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Parse options
+    opts_dict = config.get("options") or {}
+    try:
+        options = CreateSongOptions(**opts_dict)
+    except Exception as e:
+        logger.warning(f"Failed to parse options with Pydantic: {e}. Using dict fallback.")
+        options = opts_dict
+
+    # Multi-key fallback สำหรับ fields หลัก
+    audio_path = (
+        config.get("source_audio_path")
+        or config.get("sourceAudioPath")
+        or config.get("songUrlOrFilePath")
+    )
+    model_name = (
+        config.get("model_name")
+        or config.get("modelName")
+        or config.get("modelId")
+    )
+    models_path = config.get("models_path") or config.get("modelsPath")
+    weights_path = config.get("weights_path") or config.get("weightsPath")
+    output_dir = config.get("output_directory") or config.get("outputDirectory")
+
+    manager = InferenceManager(
+        model_name=model_name or "",
+        models_path=models_path or "",
+        weights_path=weights_path or "",
+        source_audio_path=audio_path or "",
+        output_directory=output_dir or "",
+        options=options,
+        job_id=config.get("job_id", ""),
+    )
+
+    manager.infer()
 
 
 def main():
@@ -454,4 +694,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "--config":
+        main_from_config()
+    else:
+        main()

@@ -18,6 +18,8 @@ export function GetAudioUrlByFullPath(arg1:string):Promise<string>;
 
 export function GetDefaultOptions():Promise<main.SongOptions>;
 
+export function GetDemucsProgress(arg1:string):Promise<main.DemucsProgress>;
+
 export function GetDeviceSetting():Promise<string>;
 
 export function GetFileStreamUrl(arg1:string,arg2:string):Promise<string>;
@@ -39,3 +41,5 @@ export function SaveFileAs(arg1:string,arg2:string):Promise<Record<string, strin
 export function SelectAndSaveAudio():Promise<Record<string, string>>;
 
 export function SelectAndSaveModel():Promise<Record<string, string>>;
+
+export function StartDemucsJob(arg1:main.DemucsRequest):Promise<main.DemucsResponse>;

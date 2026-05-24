@@ -170,7 +170,6 @@ class SeparateAttributes:
             self.set_progress_bar(0.1, (0.8 / length * self.progress_value))
 
     def write_audio(self, stem_path, stem_source, samplerate):
-        # [แก้ไขเพิ่มเติม]: ตรวจสอบมิติข้อมูลอาร์เรย์เสียงก่อนบันทึก ป้องกันข้อมูลบิดเบี้ยวหรือขนาดแชนเนลเกินมาตรฐาน WAV
         if isinstance(stem_source, np.ndarray):
             if stem_source.ndim == 2 and stem_source.shape[0] == 2 and stem_source.shape[1] > 2:
                 stem_source = stem_source.T
@@ -384,7 +383,6 @@ class SeparateDemucs(SeparateAttributes):
 
     def separate(self):
         samplerate = 44100
-        model_scale = None
         is_no_write = False
         is_no_piano_guitar = False
 
@@ -738,6 +736,29 @@ def prepare_mix(mix, chunk_set, margin_set, mdx_net_cut=False, is_missing_mix=Fa
     if mix.ndim == 1:
         mix = np.asfortranarray([mix, mix])
 
+    # === [แก้ไขเพิ่มเติม]: ระบบกรองและตัดเสียงฮัมอัจฉริยะ (Hum & Rumble Removal Filter) ===
+    try:
+        from scipy.signal import iirnotch, filtfilt, butter
+        
+        # 1. ตัดเสียงฮัมจากกระแสไฟฟ้า (Power Line Hum) ที่ 50Hz และ 60Hz พร้อมกรอง Harmonics (100Hz, 120Hz, 150Hz, 180Hz)
+        for base_freq in [50, 60]:
+            for harmonic in range(1, 4):
+                notch_freq = base_freq * harmonic
+                if notch_freq < samplerate / 2:
+                    b, a = iirnotch(notch_freq, Q=40.0, fs=samplerate)
+                    for ch in range(mix.shape[0]):
+                        mix[ch] = filtfilt(b, a, mix[ch])
+        
+        # 2. ตัดเสียงหึ่งสั่นเครือความถี่ต่ำมาก (Sub-bass Rumble/Mud) ที่ต่ำกว่า 30Hz ออกไป
+        b_hp, a_hp = butter(N=4, Wn=30.0, btype='highpass', fs=samplerate)
+        for ch in range(mix.shape[0]):
+            mix[ch] = filtfilt(b_hp, a_hp, mix[ch])
+            
+        print("=== [Replay AI Patched]: Applied Hum & Rumble Removal Filters Successfully ===")
+    except Exception as filter_err:
+        print(f"Warning: Could not apply hum filter: {filter_err}")
+    # ===================================================================================
+
     def get_segmented_mix(chunk_set=chunk_set):
         segmented_mix = {}
 
@@ -779,7 +800,6 @@ def rerun_mp3(audio_file, sample_rate=44100):
 
 
 def save_format(audio_path, output_format, mp3_bit_set):
-    # --- [แก้ไขเพิ่มเติม]: เพิ่มฟังก์ชันวนลูปตรวจสอบและป้องกัน Windows Lock Latency ---
     for _ in range(15):
         if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
             break
@@ -800,7 +820,6 @@ def save_format(audio_path, output_format, mp3_bit_set):
             audio_path_mp3 = audio_path.replace(".wav", ".mp3")
             file.export(audio_path_mp3, format="mp3", bitrate=mp3_bit_set)
             
-        # สร้างไฟล์พรีวิวเสียงสำหรับเครื่องเล่นใน Frontend เสมอ
         audio_path_preview = audio_path.replace(".wav", "_preview.mp3")
         file.export(audio_path_preview, format="mp3", bitrate="192k")
     except Exception as convert_err:

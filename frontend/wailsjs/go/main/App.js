@@ -34,6 +34,10 @@ export function GetDefaultOptions() {
   return window['go']['main']['App']['GetDefaultOptions']();
 }
 
+export function GetDemucsProgress(arg1) {
+  return window['go']['main']['App']['GetDemucsProgress'](arg1);
+}
+
 export function GetDeviceSetting() {
   return window['go']['main']['App']['GetDeviceSetting']();
 }
@@ -76,4 +80,8 @@ export function SelectAndSaveAudio() {
 
 export function SelectAndSaveModel() {
   return window['go']['main']['App']['SelectAndSaveModel']();
+}
+
+export function StartDemucsJob(arg1) {
+  return window['go']['main']['App']['StartDemucsJob'](arg1);
 }

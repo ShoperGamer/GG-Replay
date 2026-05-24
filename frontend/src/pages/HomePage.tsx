@@ -16,6 +16,8 @@ interface SongOptions {
   outputFormat: string;
   volumeEnvelope: number;
   outputName: string;
+  device: string; 
+  gpu: boolean;   
 }
 
 const HomePage: React.FC = () => {
@@ -141,7 +143,9 @@ const HomePage: React.FC = () => {
         consonantProtection: consonantProtection,
         outputFormat: outputFormat,
         volumeEnvelope: volumeEnvelope,
-        outputName: customFilename.trim()
+        outputName: customFilename.trim(),
+        device: activeDevice,              
+        gpu: activeDevice === 'cuda'        
       };
 
       const jobId = await Wails.CreateSong(selectedModel, audioFile.name, options);
@@ -152,11 +156,27 @@ const HomePage: React.FC = () => {
           const jobStatus: any = await Wails.GetJobProgress(jobId);
           
           if (jobStatus) {
-             if (jobStatus.progress !== undefined) {
-               setProgress(Math.round(jobStatus.progress));
+             // 🔥 [แก้ไขจุดสำคัญ]: ลอจิกคำนวณความคืบหน้าเรียลไทม์ตามข้อความ State จริงของ RVC Pipeline หลังบ้าน
+             let realProgress = 0;
+             const msg = jobStatus.message ? jobStatus.message.toLowerCase() : "";
+
+             if (jobStatus.status === 'success' || jobStatus.status === 'completed') {
+               realProgress = 100;
+             } else if (msg.includes("writing completed file") || msg.includes("mixing converted vocals")) {
+               realProgress = 90;
+             } else if (msg.includes("loading converted vocal")) {
+               realProgress = 75;
+             } else if (msg.includes("creating audio files")) {
+               realProgress = 55;
+             } else if (msg.includes("starting inference") || msg.includes("performing inference")) {
+               realProgress = 30;
+             } else if (msg.includes("loading model")) {
+               realProgress = 15;
              } else if (jobStatus.status === 'processing') {
-               setProgress(prev => (prev < 95 ? prev + 2 : prev));
+               realProgress = 5;
              }
+
+             setProgress(realProgress);
              
              if (jobStatus.status === 'success' || jobStatus.status === 'completed') {
                if (intervalRef.current) clearInterval(intervalRef.current);
@@ -172,7 +192,7 @@ const HomePage: React.FC = () => {
              } else if (jobStatus.status === 'failed' || jobStatus.status === 'errored') {
                if (intervalRef.current) clearInterval(intervalRef.current);
                setIsLoading(false);
-               alert("การประมวลผลล้มเหว: " + (jobStatus.error || "Unknown Inference Error"));
+               alert("การประมวลผลล้มเหลว: " + (jobStatus.error || "Unknown Inference Error"));
              }
           }
         } catch (loopErr) {
@@ -196,7 +216,6 @@ const HomePage: React.FC = () => {
           <h1 className="text-2xl font-black text-white uppercase tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
             RVC Voice Conversion Studio
           </h1>
-          <p className="text-slate-500 text-xs mt-1">โหมดสลับอินเฟอเรนซ์น้ำเสียงความเร็วสูง (ข้ามขั้นตอนตัดดนตรีอัตโนมัติ)</p>
         </div>
         <button 
           onClick={() => setShowWizard(true)}
@@ -252,7 +271,7 @@ const HomePage: React.FC = () => {
                 <button className="text-[11px] text-slate-400 hover:text-indigo-400 mt-1 underline">คลิกเพื่อเปลี่ยนไฟล์เสียงร้องเดี่ยว</button>
               </div>
             ) : (
-              <p className="text-slate-400 text-xs font-medium">กดเลือกไฟล์เสียงร้องนำ (ที่แยกคัดกรองเสียงประสานออกแล้ว)</p>
+              <p className="text-slate-400 text-xs font-medium">กดเลือกไฟล์เสียงร้องนำ (แนะนำแยกคัดกรองเสียงประสานออกแล้ว)</p>
             )}
           </div>
 
@@ -283,7 +302,6 @@ const HomePage: React.FC = () => {
                 <select value={f0Method} onChange={(e) => setF0Method(e.target.value)} className="w-full bg-slate-950 text-xs text-slate-200 border border-white/10 p-2 rounded-lg outline-none cursor-pointer">
                   <option value="rmvpe">Mangio-RMVPE </option>
                   <option value="crepe">Crepe </option>
-                  <option value="harvest">Harvest </option>
                 </select>
               </div>
 
