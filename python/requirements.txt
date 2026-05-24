@@ -20,7 +20,7 @@ audioread==3.0.0
 pydub==0.25.1
 pyworld==0.3.4
 praat-parselmouth==0.4.3
-pyrubberband==0.3.0; sys_platform == 'win32'
+pyrubberband==0.4.0; sys_platform == 'win32'
 resampy==0.4.3
 julius==0.2.7
 
