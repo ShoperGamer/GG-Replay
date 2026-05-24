@@ -201,6 +201,47 @@ status.go          // ติดตามสถานะ: queue position, progres
 - **Go Compiled** - เร็วกว่า Node.js ที่ต้องรันผ่าน V8 Engine
 - **Single Process** - ลด overhead ของ multi-process ใน Electron
 
+# 🚀 CI/CD Pipeline Documentation
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    GITHUB ACTIONS CI/CD                      │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  📥 Trigger: Push/PR → ci.yml                                │
+│     ├─ 🔍 Lint & Format (Go, TS, Python)                    │
+│     ├─ 🧪 Unit Tests (ทุกภาษา)                               │
+│     ├─ 🏗️ Build Check (ทุก platform)                        │
+│     └─ 🛡️ Security Scan                                     │
+│                                                              │
+│  🏷️ Trigger: Tag v* → release.yml                            │
+│     ├─ 📦 Build Windows (.exe + NSIS installer)             │
+│     ├─ 📦 Build macOS (.app + .dmg)                          │
+│     └─ 🚀 Upload to GitHub Releases                         │
+│                                                              │
+│  🔄 Weekly → security.yml                                    │
+│     └─ 🔐 Dependency vulnerability scan                      │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+```
+.github/
+├── workflows/
+│   ├── ci.yml                  # Main CI pipeline
+│   ├── release.yml             # Release automation
+│   ├── security.yml            # Security scanning
+│   └── codeql-analysis.yml     # CodeQL security analysis
+├── dependabot.yml              # Auto dependency updates
+```
+
+# Config files
+- .golangci.yml                   # Go linter config
+- .eslintrc.cjs                   # ESLint config
+- .prettierrc                     # Prettier config
+- pytest.ini                      # Python test config
+- .pre-commit-config.yaml         # Pre-commit hooks
+
 ## ⚙️ Prerequisites (สิ่งที่ต้องติดตั้งก่อน)
 
 1. **Go** (เวอร์ชัน 1.20 ขึ้นไป) - [Download](https://go.dev/dl/)

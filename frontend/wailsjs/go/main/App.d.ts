@@ -4,6 +4,12 @@ import {main} from '../models';
 
 export function CreateSong(arg1:string,arg2:string,arg3:main.SongOptions):Promise<string>;
 
+export function DeleteAllAICovers():Promise<Record<string, any>>;
+
+export function DeleteAllOriginals():Promise<Record<string, any>>;
+
+export function DeleteAllSeparated():Promise<Record<string, any>>;
+
 export function DeleteLocalFile(arg1:string,arg2:string):Promise<boolean>;
 
 export function DeleteModel(arg1:string):Promise<boolean>;
@@ -11,6 +17,8 @@ export function DeleteModel(arg1:string):Promise<boolean>;
 export function DownloadFile(arg1:string,arg2:string):Promise<Record<string, string>>;
 
 export function GetAICoverFiles():Promise<Array<string>>;
+
+export function GetAudioCleanupSettings():Promise<Record<string, boolean>>;
 
 export function GetAudioUrl(arg1:string,arg2:string):Promise<string>;
 
@@ -33,6 +41,8 @@ export function GetSeparatedFiles():Promise<Array<string>>;
 export function GetStoredModels():Promise<Array<string>>;
 
 export function MergeAudio(arg1:string,arg2:string,arg3:number,arg4:number,arg5:string):Promise<Record<string, string>>;
+
+export function SaveAudioCleanupSettings(arg1:boolean,arg2:boolean,arg3:boolean,arg4:boolean):Promise<boolean>;
 
 export function SaveDeviceSetting(arg1:string):Promise<boolean>;
 

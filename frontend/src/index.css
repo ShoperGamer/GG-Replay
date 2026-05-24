@@ -1,4 +1,5 @@
 /* 1. Tailwind Directives */
+@import "tailwindcss";
 
 /* 2. Base Layer: สำหรับสไตล์พื้นฐาน, ตัวแปร และ Font-face */
 @layer base {

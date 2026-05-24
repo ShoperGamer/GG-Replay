@@ -18,6 +18,11 @@ interface SongOptions {
   outputName: string;
   device: string; 
   gpu: boolean;   
+  // ⚡ แก้ไขปัญหา TS2345: เพิ่มคุณสมบัติสำหรับระบบ Audio Cleanup รองรับหลังบ้าน
+  removeHum: boolean;
+  removeBackingVocals: boolean;
+  applyPostProcessing: boolean;
+  aggressiveCleanup: boolean;
 }
 
 const HomePage: React.FC = () => {
@@ -47,6 +52,13 @@ const HomePage: React.FC = () => {
   const [volumeEnvelope, setVolumeEnvelope] = useState(1.0);
   
   const [stemmingMethod, setStemmingMethod] = useState('UVR-MDX-NET-Voc_FT');
+
+  // 🧼 เพิ่ม React States สำหรับเก็บค่าควบคุมการล้างสัญญาณเสียงคลีนนิ่งจากหน้า UI
+  const [removeHum, setRemoveHum] = useState(true);
+  const [removeBackingVocals, setRemoveBackingVocals] = useState(true);
+  const [applyPostProcessing, setApplyPostProcessing] = useState(true);
+  const [aggressiveCleanup, setAggressiveCleanup] = useState(false);
+
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -129,6 +141,7 @@ const HomePage: React.FC = () => {
     if (intervalRef.current) clearInterval(intervalRef.current);
 
     try {
+      // 🛠️ ประกอบออปชันให้ครบถ้วนตามโครงสร้าง Type ที่หลังบ้านต้องการร้อยเปอร์เซ็นต์
       const options: SongOptions = {
         pitch: pitch,
         instrumentalsPitch: instrumentalsPitch,
@@ -145,7 +158,11 @@ const HomePage: React.FC = () => {
         volumeEnvelope: volumeEnvelope,
         outputName: customFilename.trim(),
         device: activeDevice,              
-        gpu: activeDevice === 'cuda'        
+        gpu: activeDevice === 'cuda',
+        removeHum: removeHum,
+        removeBackingVocals: removeBackingVocals,
+        applyPostProcessing: applyPostProcessing,
+        aggressiveCleanup: aggressiveCleanup
       };
 
       const jobId = await Wails.CreateSong(selectedModel, audioFile.name, options);
@@ -156,7 +173,6 @@ const HomePage: React.FC = () => {
           const jobStatus: any = await Wails.GetJobProgress(jobId);
           
           if (jobStatus) {
-             // 🔥 [แก้ไขจุดสำคัญ]: ลอจิกคำนวณความคืบหน้าเรียลไทม์ตามข้อความ State จริงของ RVC Pipeline หลังบ้าน
              let realProgress = 0;
              const msg = jobStatus.message ? jobStatus.message.toLowerCase() : "";
 
@@ -297,6 +313,24 @@ const HomePage: React.FC = () => {
                 </div>
               </div>
 
+              {/* 🧼 ปุ่มสวิตช์เพิ่มใหม่: ลบเสียงฮัม & จี่ความถี่ต่ำ */}
+              <div className="bg-slate-900/60 p-3.5 rounded-xl border border-white/5 flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-bold text-white">Remove Hum & DC Offset</h4>
+                  <p className="text-[10px] text-slate-400">ตัดเสียงฮัมเพลง เสียงจี่ ครางความถี่ต่ำ</p>
+                </div>
+                <button onClick={() => setRemoveHum(!removeHum)} className={`w-10 h-6 flex items-center rounded-full p-1 cursor-pointer transition-all ${removeHum ? 'bg-indigo-600 justify-end' : 'bg-slate-800 justify-start'}`}><span className="bg-white w-4 h-4 rounded-full shadow-md" /></button>
+              </div>
+
+              {/* 🧼 ปุ่มสวิตช์เพิ่มใหม่: ลบเสียงร้องคอรัส/เสียงประสาน */}
+              <div className="bg-slate-900/60 p-3.5 rounded-xl border border-white/5 flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-bold text-white">Remove Backing Vocals</h4>
+                  <p className="text-[10px] text-slate-400">สลัดไลน์เสียงคorัส และเสียงร้องประสานทิ้ง</p>
+                </div>
+                <button onClick={() => setRemoveBackingVocals(!removeBackingVocals)} className={`w-10 h-6 flex items-center rounded-full p-1 cursor-pointer transition-all ${removeBackingVocals ? 'bg-indigo-600 justify-end' : 'bg-slate-800 justify-start'}`}><span className="bg-white w-4 h-4 rounded-full shadow-md" /></button>
+              </div>
+
               <div className="bg-slate-900/60 p-3.5 rounded-xl border border-white/5 flex flex-col justify-center space-y-1.5">
                 <h4 className="text-xs font-bold text-white">Pitch Detection (f0)</h4>
                 <select value={f0Method} onChange={(e) => setF0Method(e.target.value)} className="w-full bg-slate-950 text-xs text-slate-200 border border-white/10 p-2 rounded-lg outline-none cursor-pointer">
@@ -322,6 +356,24 @@ const HomePage: React.FC = () => {
 
             {showAdvanced && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-white/5 animate-fadeIn">
+                {/* 🧼 เพิ่มปุ่มควบคุมการเปิดใช้งาน Noise Gate ท้ายกระบวนการแยกเสียง */}
+                <div className="bg-slate-900/40 p-3 rounded-xl border border-white/5 flex items-center justify-between">
+                  <div>
+                    <h4 className="text-xs font-bold text-white">Apply Post-Processing</h4>
+                    <p className="text-[10px] text-slate-400">เปิดระบบ Noise Gate & Spectral Cleanup</p>
+                  </div>
+                  <button onClick={() => setApplyPostProcessing(!applyPostProcessing)} className={`w-10 h-6 flex items-center rounded-full p-1 cursor-pointer transition-all ${applyPostProcessing ? 'bg-indigo-600 justify-end' : 'bg-slate-800 justify-start'}`}><span className="bg-white w-4 h-4 rounded-full shadow-md" /></button>
+                </div>
+
+                {/* 🧼 เพิ่มปุ่มเปิด Aggressive Mode ตัดเสียงเงียบระดับ -60dB อย่างเฉียบขาด เพื่อแก้ปัญหาร้องพร้อมกัน */}
+                <div className="bg-slate-900/40 p-3 rounded-xl border border-white/5 flex items-center justify-between">
+                  <div>
+                    <h4 className="text-xs font-bold text-white">Aggressive Cleanup Mode</h4>
+                    <p className="text-[10px] text-slate-400">บีบ Noise Gate ดุดัน และทำ De-Esser ลดเสียงพร่าแหลม</p>
+                  </div>
+                  <button onClick={() => setAggressiveCleanup(!aggressiveCleanup)} className={`w-10 h-6 flex items-center rounded-full p-1 cursor-pointer transition-all ${aggressiveCleanup ? 'bg-indigo-600 justify-end' : 'bg-slate-800 justify-start'}`}><span className="bg-white w-4 h-4 rounded-full shadow-md" /></button>
+                </div>
+
                 <div className="bg-slate-900/40 p-3 rounded-xl border border-white/5 flex flex-col justify-between space-y-1.5">
                   <div className="flex justify-between"><span className="text-xs font-bold text-white">Index Ratio</span>
                     <div className="flex items-center bg-slate-950/60 rounded-md border border-white/10 px-1">

@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -24,62 +25,45 @@ _current_file = os.path.abspath(__file__)
 _current_dir = os.path.dirname(_current_file)          # .../python/inference
 _python_root = os.path.dirname(_current_dir)           # .../python
 _lib_root = os.path.join(_python_root, "lib")          # .../python/lib
-
 _paths_to_inject = [
     _python_root,
     _current_dir,
     _lib_root,
     os.path.join(_current_dir, "lib"),
 ]
-
 for _p in _paths_to_inject:
     if os.path.exists(_p) and _p not in sys.path:
         sys.path.insert(0, _p)
-# =====================================================================
 
+# =====================================================================
+# 🎯 IMPORTS
+# =====================================================================
+import librosa
 from inference.api_models import CreateSongOptions, JobProgressResp, STATUS
 from inference.args import parse_args
 from inference.utils import find_pth_and_index_files, load_audio
-import librosa
+
+# 🎯 Audio Cleanup - graceful fallback (ถ้าไม่มี module ก็ skip ได้)
+try:
+    from inference.audio_preprocessing import preprocess_audio_for_uvr, postprocess_vocals
+    HAS_AUDIO_PREPROCESSING = True
+except ImportError:
+    HAS_AUDIO_PREPROCESSING = False
 
 logger = logging.getLogger(__name__)
 
 
 class InferenceManager:
-    def set_track_values(self, track_on_disk):
-        self.source_audio_path = track_on_disk
-        self.track_name = os.path.splitext(os.path.basename(self.source_audio_path))[0]
-        if self.sample_mode_30s:
-            logger.info("Sample mode: Trimming audio to 30s")
-            sample_rate = 44100
-            audio_data: np.ndarray = load_audio(self.source_audio_path, sample_rate)
-            start = sample_rate * (self.sample_mode_start_time or 0)
-            end = start + (sample_rate * 30)
-            audio_data = audio_data[start:end]
-            self.track_md5 = hashlib.md5(audio_data.tobytes()).hexdigest()
-            sample_file = os.path.join(
-                self.originals_directory,
-                f"sample_{self.track_md5}.wav",
-            )
-            wavfile.write(sample_file, sample_rate, audio_data)
-            self.source_audio_path = sample_file
-
-        hasher = hashlib.md5()
-        with open(self.source_audio_path, "rb") as f:
-            for chunk in iter(lambda: f.read(65536), b""):
-                hasher.update(chunk)
-        self.track_md5 = hasher.hexdigest()
-        
-        os.makedirs(self.originals_directory, exist_ok=True)
-        
-        extension = os.path.splitext(self.source_audio_path)[1]
-        self.originals_file = os.path.join(
-            self.originals_directory,
-            f"{self.track_md5}{extension}",
-        )
-        if not os.path.exists(self.originals_file):
-            shutil.copyfile(self.source_audio_path, self.originals_file)
-        self.source_audio_path = self.originals_file
+    """
+    Main orchestrator สำหรับ RVC Voice Conversion pipeline
+    
+    🎯 UVR 5-Pass Pipeline (ลำดับ Tuple ที่พิสูจน์แล้วว่าถูกต้อง):
+        Pass 1: (instrumentals, vocals) = Stemmer.separate_track(...)
+        Pass 2: (echo_reverb, vocals) = Stemmer.separate_track(...)  [conditional]
+        Pass 3: (vocals, instrumental_bleed) = Stemmer.separate_track(...)
+        Pass 4: (backing_vocals, lead_vocals) = Stemmer.separate_track(...)
+        Pass 5: (secondary_bleed, absolute_vocals) = Stemmer.separate_track(...)
+    """
 
     def __init__(
         self,
@@ -98,19 +82,19 @@ class InferenceManager:
         self.source_audio_path: str = source_audio_path
         self.last_progress_resp: Optional[JobProgressResp] = None
         self.status: STATUS = "processing"
-        
+
         # 🎯 [GO BRIDGE]: ใช้ JSON stdout printer ถ้าไม่มี callback ส่งมา
         self.set_status = set_status if set_status else self._default_json_status_printer
         self.check_stop_job = check_stop_job if check_stop_job else lambda: False
         self.run_thread: Optional[threading.Thread] = None
-        
+
         # ตัวแปรสำหรับจัดการไฟล์เสียง
         self.instrumentals_file: Optional[str] = None
         self.vocals_file: Optional[str] = None
         self.pre_deecho_vocals_file: Optional[str] = None
         self.converted_vocals_file = None
-        self.garbage_files = [] # รายการไฟล์ขยะที่จะถูกล้างทิ้งตอนจบ
-        
+        self.garbage_files = []  # รายการไฟล์ขยะที่จะถูกล้างทิ้งตอนจบ
+
         self.model = None
         self.job_id = job_id
         self.originals_file = None
@@ -122,7 +106,6 @@ class InferenceManager:
             self.output_name = options.outputName
         elif job_id:
             try:
-                import tempfile
                 temp_config_path = os.path.join(tempfile.gettempdir(), f"job_{job_id}.json")
                 if os.path.exists(temp_config_path):
                     with open(temp_config_path, "r", encoding="utf-8") as f:
@@ -156,7 +139,7 @@ class InferenceManager:
         self.models_path = models_path
         self.weights_path = weights_path
         self.output_directory = os.path.join(output_directory, job_id) if job_id else output_directory
-        
+
         os.makedirs(self.output_directory, exist_ok=True)
         self.stems_directory = os.path.join(self.output_directory, "stems")
         self.yt_cache = os.path.join(self.output_directory, "yt-cache")
@@ -174,11 +157,49 @@ class InferenceManager:
         logger.info(f"Stemming method: {self.stemming_model}")
         logger.info(f"F0 method: {self.f0_method}")
         logger.info(f"Output path: {self.output_directory}")
+        logger.info(f"🎯 Audio Cleanup module: {'✅ Available' if HAS_AUDIO_PREPROCESSING else '⚠️ Not available'}")
 
         self.elapsed_seconds = None
         self.error: Optional[Exception] = None
         self.remaining_seconds = None
         self.output_filepath = None
+
+    def set_track_values(self, track_on_disk):
+        """เตรียม source audio: trim (sample mode) → hash → copy ไป originals/"""
+        self.source_audio_path = track_on_disk
+        self.track_name = os.path.splitext(os.path.basename(self.source_audio_path))[0]
+
+        if self.sample_mode_30s:
+            logger.info("Sample mode: Trimming audio to 30s")
+            sample_rate = 44100
+            audio_data: np.ndarray = load_audio(self.source_audio_path, sample_rate)
+            start = sample_rate * (self.sample_mode_start_time or 0)
+            end = start + (sample_rate * 30)
+            audio_data = audio_data[start:end]
+            self.track_md5 = hashlib.md5(audio_data.tobytes()).hexdigest()
+            sample_file = os.path.join(
+                self.originals_directory,
+                f"sample_{self.track_md5}.wav",
+            )
+            wavfile.write(sample_file, sample_rate, audio_data)
+            self.source_audio_path = sample_file
+
+        hasher = hashlib.md5()
+        with open(self.source_audio_path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                hasher.update(chunk)
+        self.track_md5 = hasher.hexdigest()
+
+        os.makedirs(self.originals_directory, exist_ok=True)
+
+        extension = os.path.splitext(self.source_audio_path)[1]
+        self.originals_file = os.path.join(
+            self.originals_directory,
+            f"{self.track_md5}{extension}",
+        )
+        if not os.path.exists(self.originals_file):
+            shutil.copyfile(self.source_audio_path, self.originals_file)
+        self.source_audio_path = self.originals_file
 
     # =====================================================================
     # 🎯 JSON Status Printer - สำหรับ Go bridge ดักจับ stdout
@@ -199,7 +220,7 @@ class InferenceManager:
             logger.info(f"Status: {getattr(status, 'message', 'unknown')}")
 
     def clear_old_cache_before_start(self):
-        """ ล้างโฟลเดอร์ Stems เก่าทิ้ง สร้างใหม่เพื่อความสะอาดก่อนรัน """
+        """ล้างโฟลเดอร์ Stems เก่าทิ้ง สร้างใหม่เพื่อความสะอาดก่อนรัน"""
         try:
             if os.path.exists(self.stems_directory):
                 shutil.rmtree(self.stems_directory, ignore_errors=True)
@@ -208,7 +229,7 @@ class InferenceManager:
             logger.warning(f"Could not clear old stems cache: {e}")
 
     def clear_garbage_cache(self):
-        """ ล้างไฟล์ขยะระหว่างทางเพื่อคืนพื้นที่ว่างหลังแปลงไฟล์เสร็จ """
+        """ล้างไฟล์ขยะระหว่างทางเพื่อคืนพื้นที่ว่างหลังแปลงไฟล์เสร็จ"""
         logger.info("🧹 Clearing intermediate garbage cache files...")
         for filepath in self.garbage_files:
             if filepath and os.path.exists(filepath):
@@ -216,14 +237,14 @@ class InferenceManager:
                     os.remove(filepath)
                 except Exception as e:
                     logger.debug(f"Failed to remove cache file {filepath}: {e}")
-        
+
         # ลบโฟลเดอร์ก๊อปปี้ตอนล้างเสียงสะท้อน
         copies_dir = os.path.join(self.stems_directory, "vocals_copies")
         if os.path.exists(copies_dir):
             shutil.rmtree(copies_dir, ignore_errors=True)
 
     def _sync_global_hardware(self):
-        """ ระบบล็อกและสลับอุปกรณ์ประมวลผล (CPU/GPU) """
+        """ระบบล็อกและสลับอุปกรณ์ประมวลผล (CPU/GPU)"""
         from inference.config import config
 
         target_device = None
@@ -245,7 +266,7 @@ class InferenceManager:
                 settings_path = os.path.abspath(os.path.join(base_dir, "..", "data", "settings.json"))
                 if not os.path.exists(settings_path):
                     settings_path = os.path.abspath(os.path.join(base_dir, "data", "settings.json"))
-                
+
                 if os.path.exists(settings_path):
                     with open(settings_path, "r", encoding="utf-8") as f:
                         settings = json.load(f)
@@ -298,114 +319,205 @@ class InferenceManager:
         logger.info("---------------------------------")
 
     def stem_and_load_input_track(self):
+        """
+        🎯 UVR 5-Pass Pipeline (ลำดับ Tuple ที่พิสูจน์แล้วว่าถูกต้อง)
+        
+        Pass 1: แยก vocals/instrumentals → (instrumentals, vocals)
+        Pass 2: De-echo/de-reverb → (echo, vocals) [conditional]
+        Pass 3: ลบ instrumental bleed → (vocals, bleed)
+        Pass 4: แยก backing vocals → (backing, lead)
+        Pass 5: Final purification → (secondary_bleed, absolute_vocals)
+        """
         from inference.stemmer import Stemmer
 
         self.check_and_update_status("UVR: Starting track separation...")
         if self.pre_stemmed:
             logger.info("UVR: Pre-stemmed track detected. Skipping separation.")
             self.vocals_file = self.source_audio_path
-        else:
-            start_time = time.time()
+            return
 
-            def update_status(msg):
-                self.check_and_update_status(f"Separating track... {msg}")
+        start_time = time.time()
 
-            from inference.config import config
-            target_device = config.device
+        from inference.config import config
+        target_device = config.device
 
-            base_model = self.stemming_model
-            if base_model == "Absolute_Lead_Isolation":
-                base_model = "UVR-MDX-NET Voc FT"
+        base_model = self.stemming_model
+        if base_model == "Absolute_Lead_Isolation":
+            base_model = "UVR-MDX-NET Voc FT"
 
-            # 🚀 Passที่ 1: แยกไฟล์ดนตรีและเสียงร้อง (ดนตรีออกมาก่อน)
-            self.instrumentals_file, self.vocals_file = Stemmer.separate_track(
-                self.source_audio_path,
+        # =====================================================================
+        # 🎯 STEP 0: PREPROCESSING (ตัด hum + DC offset) - ไม่กระทบ Tuple
+        # =====================================================================
+        working_input = self.source_audio_path
+        if getattr(self.options, 'removeHum', False) and HAS_AUDIO_PREPROCESSING:
+            self.check_and_update_status("🧹 Preprocessing audio (removing hum & DC offset)...")
+            preprocessed_path = os.path.join(
                 self.stems_directory,
-                self.weights_path,
-                base_model,
-                update_status,
-                device=target_device,
+                f"preprocessed_{self.track_md5 or 'audio'}.wav"
             )
-            
-            # 🚀 Passที่ 2: ล้างเสียงสะท้อน (De-Echo / De-Reverb)
-            if self.options.deEchoDeReverb:
-                self.check_and_update_status("De-Echoing input file...")
-                
-                hasher_vocals = hashlib.md5()
-                with open(self.vocals_file, "rb") as f:
-                    for chunk in iter(lambda: f.read(65536), b""):
-                        hasher_vocals.update(chunk)
-                md5_vocals = hasher_vocals.hexdigest()
-
-                vocal_copies_dir = os.path.join(self.stems_directory, "vocals_copies")
-                os.makedirs(vocal_copies_dir, exist_ok=True)
-                md5_vocals_file = os.path.join(vocal_copies_dir, f"{md5_vocals}.wav")
-                if not os.path.exists(md5_vocals_file):
-                    shutil.copyfile(self.vocals_file, md5_vocals_file)
-                self.pre_deecho_vocals_file = self.vocals_file
-
-                def update_status_deecho(msg):
-                    self.check_and_update_status(f"De-echoing track... {msg}")
-
-                # เสียงเอคโค่ส่วนเกิน (สลัดออก), เสียงร้องหลักที่ผ่านการคลีน
-                echo_and_reverb_file, self.vocals_file = Stemmer.separate_track(
-                    md5_vocals_file,
-                    self.stems_directory,
-                    self.weights_path,
-                    "UVR-DeEcho-DeReverb by FoxJoy",
-                    update_status_deecho,
-                    device=target_device,
+            try:
+                result = preprocess_audio_for_uvr(
+                    input_path=self.source_audio_path,
+                    output_path=preprocessed_path,
+                    remove_hum=True,
+                    remove_dc_offset=True,
+                    normalize_peak=0.95,
                 )
-                self.garbage_files.append(echo_and_reverb_file) # เก็บลงถังขยะ
+                if result != self.source_audio_path and os.path.exists(result):
+                    working_input = result
+                    self.garbage_files.append(result)
+                    logger.info(f"[Preprocess] ✅ Completed: {result}")
+                else:
+                    logger.warning("[Preprocess] ⚠️ Failed, using original source")
+            except Exception as e:
+                logger.warning(f"[Preprocess] ⚠️ Error: {e}, using original source")
+        elif getattr(self.options, 'removeHum', False) and not HAS_AUDIO_PREPROCESSING:
+            logger.warning("[Preprocess] ⚠️ audio_preprocessing module not available, skipping")
 
-            # 🚀 Passที่ 3: ลบเศษดนตรีหลุดรอดด้วย Kim_Vocal_1 ตามลำดับที่ระบุ [self.vocals_file, instrumental_bleed]
-            self.check_and_update_status("Purifying Vocals (Removing Instrumental Bleeding)...")
-            def update_status_clean(msg):
-                self.check_and_update_status(f"Cleaning Instruments Bleed... {msg}")
-            
-            self.vocals_file, instrumental_bleed = Stemmer.separate_track(
-                self.vocals_file,
+        # =====================================================================
+        # 🚀 Pass 1: แยกไฟล์ดนตรีและเสียงร้อง (ดนตรีออกมาก่อน)
+        # Tuple: (instrumentals_file, vocals_file)
+        # =====================================================================
+        def update_status(msg):
+            self.check_and_update_status(f"Separating track... {msg}")
+
+        self.instrumentals_file, self.vocals_file = Stemmer.separate_track(
+            working_input,
+            self.stems_directory,
+            self.weights_path,
+            base_model,
+            update_status,
+            device=target_device,
+        )
+
+        # =====================================================================
+        # 🚀 Pass 2: ล้างเสียงสะท้อน (De-Echo / De-Reverb) [conditional]
+        # Tuple: (echo_and_reverb_file, vocals_file)
+        # =====================================================================
+        if self.options.deEchoDeReverb:
+            self.check_and_update_status("De-Echoing input file...")
+
+            hasher_vocals = hashlib.md5()
+            with open(self.vocals_file, "rb") as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    hasher_vocals.update(chunk)
+            md5_vocals = hasher_vocals.hexdigest()
+
+            vocal_copies_dir = os.path.join(self.stems_directory, "vocals_copies")
+            os.makedirs(vocal_copies_dir, exist_ok=True)
+            md5_vocals_file = os.path.join(vocal_copies_dir, f"{md5_vocals}.wav")
+            if not os.path.exists(md5_vocals_file):
+                shutil.copyfile(self.vocals_file, md5_vocals_file)
+            self.pre_deecho_vocals_file = self.vocals_file
+
+            def update_status_deecho(msg):
+                self.check_and_update_status(f"De-echoing track... {msg}")
+
+            # เสียงเอคโค่ส่วนเกิน (สลัดออก), เสียงร้องหลักที่ผ่านการคลีน
+            echo_and_reverb_file, self.vocals_file = Stemmer.separate_track(
+                md5_vocals_file,
                 self.stems_directory,
                 self.weights_path,
-                "Kim_Vocal_1",
-                update_status_clean,
+                "UVR-DeEcho-DeReverb by FoxJoy",
+                update_status_deecho,
                 device=target_device,
             )
-            self.garbage_files.append(instrumental_bleed) # เก็บลงถังขยะ
+            self.garbage_files.append(echo_and_reverb_file)  # เก็บลงถังขยะ
 
-            # 🚀 Passที่ 4: สลัดเสียงร้องคอรัส แบ็คกิ้งโวคอล ด้วย Karaoke 2
-            self.check_and_update_status("Isolating Lead Vocals (Removing Backing Vocals & Harmonies)...")
-            def update_status_karaoke(msg):
-                self.check_and_update_status(f"Isolating Main Lead Singer... {msg}")
+        # =====================================================================
+        # 🚀 Pass 3: ลบเศษดนตรีหลุดรอดด้วย Kim_Vocal_1
+        # Tuple: (vocals_file, instrumental_bleed) ← vocals มาก่อน!
+        # =====================================================================
+        self.check_and_update_status("Purifying Vocals (Removing Instrumental Bleeding)...")
 
-            backing_vocals_file, self.vocals_file = Stemmer.separate_track(
-                self.vocals_file,
+        def update_status_clean(msg):
+            self.check_and_update_status(f"Cleaning Instruments Bleed... {msg}")
+
+        self.vocals_file, instrumental_bleed = Stemmer.separate_track(
+            self.vocals_file,
+            self.stems_directory,
+            self.weights_path,
+            "Kim_Vocal_1",
+            update_status_clean,
+            device=target_device,
+        )
+        self.garbage_files.append(instrumental_bleed)  # เก็บลงถังขยะ
+
+        # =====================================================================
+        # 🚀 Pass 4: สลัดเสียงร้องคอรัส แบ็คกิ้งโวคอล ด้วย Karaoke 2
+        # Tuple: (backing_vocals_file, lead_vocals) ← backing มาก่อน!
+        # =====================================================================
+        self.check_and_update_status("Isolating Lead Vocals (Removing Backing Vocals & Harmonies)...")
+
+        def update_status_karaoke(msg):
+            self.check_and_update_status(f"Isolating Main Lead Singer... {msg}")
+
+        backing_vocals_file, self.vocals_file = Stemmer.separate_track(
+            self.vocals_file,
+            self.stems_directory,
+            self.weights_path,
+            "UVR-MDX-NET Karaoke 2",
+            update_status_karaoke,
+            device=target_device,
+        )
+        self.garbage_files.append(backing_vocals_file)  # เก็บลงถังขยะ
+
+        # =====================================================================
+        # 🚀 Pass 5: คัดเสียงร้องนำเดี่ยวขั้นเด็ดขาดด้วย UVR-MDX-NET Main
+        # Tuple: (secondary_vocal_bleed, absolute_vocals) ← bleed มาก่อน!
+        # =====================================================================
+        self.check_and_update_status("Isolating Absolute Single Lead Singer...")
+
+        def update_status_main(msg):
+            self.check_and_update_status(f"Purifying Single Vocalist... {msg}")
+
+        secondary_vocal_bleed, self.vocals_file = Stemmer.separate_track(
+            self.vocals_file,
+            self.stems_directory,
+            self.weights_path,
+            "UVR-MDX-NET Main",
+            update_status_main,
+            device=target_device,
+        )
+        self.garbage_files.append(secondary_vocal_bleed)  # เก็บลงถังขยะ
+
+        # =====================================================================
+        # 🎯 STEP FINAL: POST-PROCESSING (Noise gate + cleanup) - ไม่กระทบ Tuple
+        # =====================================================================
+        if getattr(self.options, 'applyPostProcessing', False) and HAS_AUDIO_PREPROCESSING:
+            self.check_and_update_status("✨ Post-processing vocals (noise gate + cleanup)...")
+            postprocessed_path = os.path.join(
                 self.stems_directory,
-                self.weights_path,
-                "UVR-MDX-NET Karaoke 2",
-                update_status_karaoke,
-                device=target_device,
+                f"postprocessed_{os.path.basename(self.vocals_file)}"
             )
-            self.garbage_files.append(backing_vocals_file) # เก็บลงถังขยะ
+            gate_db = -60 if getattr(self.options, 'aggressiveCleanup', False) else -55
+            try:
+                result = postprocess_vocals(
+                    input_path=self.vocals_file,
+                    output_path=postprocessed_path,
+                    apply_noise_gate=True,
+                    apply_spectral_cleanup=True,
+                    apply_de_ess=getattr(self.options, 'aggressiveCleanup', False),
+                    noise_gate_db=gate_db,
+                )
+                if result == postprocessed_path and os.path.exists(result):
+                    self.garbage_files.append(self.vocals_file)  # ไฟล์เก่าเป็น garbage
+                    self.vocals_file = result
+                    logger.info(f"[Postprocess] ✅ Completed: {result}")
+                else:
+                    logger.warning("[Postprocess] ⚠️ Failed, using pre-processed vocals")
+            except Exception as e:
+                logger.warning(f"[Postprocess] ⚠️ Error: {e}, using pre-processed vocals")
+        elif getattr(self.options, 'applyPostProcessing', False) and not HAS_AUDIO_PREPROCESSING:
+            logger.warning("[Postprocess] ⚠️ audio_preprocessing module not available, skipping")
 
-            # 🚀 Passที่ 5: คัดเสียงร้องนำเดี่ยวขั้นเด็ดขาดด้วย UVR-MDX-NET Main
-            self.check_and_update_status("Isolating Absolute Single Lead Singer...")
-            def update_status_main(msg):
-                self.check_and_update_status(f"Purifying Single Vocalist... {msg}")
+        self.garbage_files.append(self.vocals_file)  # ไฟล์ร้องดิบใช้เสร็จแล้วเตรียมทิ้งตอนจบ
 
-            secondary_vocal_bleed, self.vocals_file = Stemmer.separate_track(
-                self.vocals_file,
-                self.stems_directory,
-                self.weights_path,
-                "UVR-MDX-NET Main",
-                update_status_main,
-                device=target_device,
-            )
-            self.garbage_files.append(secondary_vocal_bleed) # เก็บลงถังขยะ
-            self.garbage_files.append(self.vocals_file) # ไฟล์ร้องดิบใช้เสร็จแล้วเตรียมทิ้งตอนจบ
-
-            elapsed_time = time.time() - start_time
-            logger.info(f"Advanced Single Vocalist Purification complete. Total elapsed time: {elapsed_time}")
+        elapsed_time = time.time() - start_time
+        logger.info(f"Advanced Single Vocalist Purification complete. Total elapsed time: {elapsed_time:.2f}s")
+        logger.info(f"   🎯 Audio Cleanup: hum={getattr(self.options, 'removeHum', False)}, "
+                    f"post={getattr(self.options, 'applyPostProcessing', False)}, "
+                    f"aggressive={getattr(self.options, 'aggressiveCleanup', False)}")
 
         logger.info("UVR: Track separation complete.")
         logger.info("---------------------------------")
@@ -451,28 +563,28 @@ class InferenceManager:
                 self.options,
             )
             self.check_and_update_status("Creating audio files...")
-            
+
             ext = ".wav" if self.output_format == "wav" else ".mp3"
             output_file = f"{self.output_name}{ext}"
-            
+
             parameters = {"format": "wav"}
             if self.output_format == "mp3_192k":
                 parameters = {"format": "mp3", "bitrate": "192k"}
             elif self.output_format == "mp3_320k":
                 parameters = {"format": "mp3", "bitrate": "320k"}
-                
+
             joined_track_export = os.path.join(self.output_directory, output_file)
             self.output_filepath = joined_track_export
             self.converted_vocals_file = joined_track_export
 
             temp_wav_path = os.path.join(self.output_directory, "temp_inference_vocal.wav")
-            
+
             audio_opt = np.nan_to_num(np.array(audio_opt, dtype=np.float32))
 
             peak_limit = np.percentile(np.abs(audio_opt), 99.9)
             if peak_limit > 0:
                 audio_opt = np.clip(audio_opt, -peak_limit, peak_limit)
-                
+
             max_v = np.max(np.abs(audio_opt))
             if max_v > 0:
                 if max_v <= 1.01:
@@ -481,22 +593,22 @@ class InferenceManager:
                     audio_opt = (audio_opt / max_v * 32767).astype(np.int16)
             else:
                 audio_opt = audio_opt.astype(np.int16)
-                
+
             logger.info(f"RVCv2: Inference succeeded. Writing temporary wav...")
             wavfile.write(temp_wav_path, tgt_sr, audio_opt)
             logger.info("---------------------------------")
-            
+
             logger.info("Loading converted vocal track...")
             vocal = AudioSegment.from_wav(temp_wav_path)
-            
+
             # 🚀 มิกซ์รวมเสียง: โหลดดนตรีเป็นฐานล่าง แล้วเอาเสียงร้อง (vocal) โปะทับไว้ด้านบนด้วย overlay
             if not self.vocals_only and self.instrumentals_file and os.path.exists(self.instrumentals_file):
                 logger.info("Mixing converted vocals on top of original instrumentals...")
                 instrumental = AudioSegment.from_file(self.instrumentals_file)
-                
+
                 if self.instrumentals_pitch:
                     instrumental = self.pitch_shift(instrumental, self.instrumentals_pitch)
-                
+
                 # โค้ดนี้ทำให้เสียงร้องอยู่บน เสียงดนตรีอยู่ล่าง (Background=Instrumental, Foreground=Vocal)
                 self.joined_track = instrumental.overlay(vocal)
             else:
@@ -505,14 +617,14 @@ class InferenceManager:
 
             logger.info("Writing completed file...")
             self.joined_track.export(joined_track_export, **parameters)
-            
+
             if os.path.exists(temp_wav_path):
                 os.remove(temp_wav_path)
-                
+
             logger.info(f"Track successfully written to: {joined_track_export}")
             logger.info("---------------------------------")
             logger.info("Inference complete.")
-            
+
             # ปล่อยแรม
             self.model.clearMemory()
             del self.model
@@ -598,10 +710,10 @@ class InferenceManager:
 
             self.check_and_update_status("Performing inference...")
             self.perform_inference()
-            
+
             if self.status != "stopped":
                 self.check_and_update_status("Completed", "completed")
-                
+
         except RuntimeError as e:
             traceback.print_exc()
             self.error = e
@@ -618,11 +730,11 @@ class InferenceManager:
         finally:
             # ล้างไฟล์ขยะที่ไม่จำเป็นออกเมื่อเสร็จสิ้นการประมวลผล เพื่อคืนพื้นที่ให้ผู้ใช้
             self.clear_garbage_cache()
-            
+
             if self.status == "processing":
                 self.check_and_update_status("Completed", "completed")
             elapsed_time = time.time() - start_time
-            logger.info(f"Total elapsed time: {elapsed_time}")
+            logger.info(f"Total elapsed time: {elapsed_time:.2f}s")
 
 
 # =====================================================================

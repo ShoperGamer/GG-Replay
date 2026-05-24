@@ -22,6 +22,10 @@ export namespace main {
 	    sourceAudioPath: string;
 	    model: string;
 	    device: string;
+	    removeHum: boolean;
+	    removeBackingVocals: boolean;
+	    applyPostProcessing: boolean;
+	    aggressiveCleanup: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new DemucsRequest(source);
@@ -32,6 +36,10 @@ export namespace main {
 	        this.sourceAudioPath = source["sourceAudioPath"];
 	        this.model = source["model"];
 	        this.device = source["device"];
+	        this.removeHum = source["removeHum"];
+	        this.removeBackingVocals = source["removeBackingVocals"];
+	        this.applyPostProcessing = source["applyPostProcessing"];
+	        this.aggressiveCleanup = source["aggressiveCleanup"];
 	    }
 	}
 	export class DemucsResponse {
@@ -47,6 +55,7 @@ export namespace main {
 	    }
 	}
 	export class SongOptions {
+	    outputName: string;
 	    pitch: number;
 	    instrumentalsPitch: number;
 	    preStemmed: boolean;
@@ -60,9 +69,12 @@ export namespace main {
 	    consonantProtection: number;
 	    outputFormat: string;
 	    volumeEnvelope: number;
-	    outputName: string;
 	    device: string;
 	    gpu: boolean;
+	    removeHum: boolean;
+	    removeBackingVocals: boolean;
+	    applyPostProcessing: boolean;
+	    aggressiveCleanup: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new SongOptions(source);
@@ -70,6 +82,7 @@ export namespace main {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.outputName = source["outputName"];
 	        this.pitch = source["pitch"];
 	        this.instrumentalsPitch = source["instrumentalsPitch"];
 	        this.preStemmed = source["preStemmed"];
@@ -83,9 +96,12 @@ export namespace main {
 	        this.consonantProtection = source["consonantProtection"];
 	        this.outputFormat = source["outputFormat"];
 	        this.volumeEnvelope = source["volumeEnvelope"];
-	        this.outputName = source["outputName"];
 	        this.device = source["device"];
 	        this.gpu = source["gpu"];
+	        this.removeHum = source["removeHum"];
+	        this.removeBackingVocals = source["removeBackingVocals"];
+	        this.applyPostProcessing = source["applyPostProcessing"];
+	        this.aggressiveCleanup = source["aggressiveCleanup"];
 	    }
 	}
 

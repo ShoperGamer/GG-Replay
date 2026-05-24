@@ -6,7 +6,6 @@ import os
 import time
 import traceback
 import warnings
-
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,11 +18,52 @@ import soundfile as sf
 import torch
 
 import inference.uvr.lib_v5.mdxnet as MdxnetSet
+
+# =====================================================================
+# 🎯 DEMUCS IMPORTS - รองรับทั้ง v3 และ v4+
+# =====================================================================
 from demucs.apply import apply_model
 from demucs.hdemucs import HDemucs
-from demucs.model_v2 import auto_load_demucs_model_v2
 from demucs.pretrained import get_model as _gm
-from demucs.utils import apply_model_v1, apply_model_v2
+
+# 🎯 Graceful fallback สำหรับ Demucs v4+ ที่ลบ model_v2 ออก
+try:
+    from demucs.model_v2 import auto_load_demucs_model_v2
+except ImportError:
+    def auto_load_demucs_model_v2(sources, model_path):
+        """Fallback สำหรับ Demucs v4+ ที่ไม่มี model_v2 - ใช้ HDemucs แทน"""
+        _logger = logging.getLogger(__name__)
+        _logger.warning("[Demucs] model_v2 not available, using HDemucs fallback")
+        model = HDemucs(sources=sources)
+        state = torch.load(model_path, map_location="cpu")
+        if isinstance(state, dict) and "state_dict" in state:
+            state = state["state_dict"]
+        model.load_state_dict(state)
+        model.eval()
+        return model
+
+# 🎯 Graceful fallback สำหรับ apply_model_v1/v2
+try:
+    from demucs.utils import apply_model_v1, apply_model_v2
+except ImportError:
+    def apply_model_v1(model, mix, shifts=0, split=False, set_progress_bar=None, **kwargs):
+        """Fallback for apply_model_v1 (Demucs v4+)"""
+        return apply_model(
+            model, mix, shifts=shifts, split=split,
+            set_progress_bar=set_progress_bar, **kwargs
+        )
+
+    def apply_model_v2(model, mix, shifts=0, split=False, overlap=0.25,
+                       set_progress_bar=None, **kwargs):
+        """Fallback for apply_model_v2 (Demucs v4+)"""
+        return apply_model(
+            model, mix, shifts=shifts, split=split, overlap=overlap,
+            set_progress_bar=set_progress_bar, **kwargs
+        )
+
+# =====================================================================
+# 🎯 CONTINUE NORMAL IMPORTS
+# =====================================================================
 from inference.config import config
 from inference.uvr.constants import (
     ALL_STEMS,
@@ -57,6 +97,7 @@ if TYPE_CHECKING:
     from inference.uvr.model_data import ModelData
 
 warnings.filterwarnings("ignore")
+
 from timeit import default_timer as timer
 
 logger = logging.getLogger(__name__)
@@ -64,7 +105,8 @@ logger = logging.getLogger(__name__)
 
 class SeparateAttributes:
     def __init__(
-        self, model_data: ModelData, process_data: dict, main_model_primary_stem_4_stem=None, main_process_method=None
+        self, model_data: ModelData, process_data: dict,
+        main_model_primary_stem_4_stem=None, main_process_method=None
     ):
         self.process_data = process_data
         self.progress_value = 0
@@ -86,13 +128,13 @@ class SeparateAttributes:
         self.is_gpu_conversion = model_data.is_gpu_conversion
         self.is_normalization = model_data.is_normalization
         self.is_ensemble_mode = model_data.is_ensemble_mode
-        self.secondary_model = model_data.secondary_model  
+        self.secondary_model = model_data.secondary_model
         self.primary_model_primary_stem = model_data.primary_model_primary_stem
-        self.primary_stem = model_data.primary_stem  
-        self.secondary_stem = model_data.secondary_stem  
-        self.is_invert_spec = model_data.is_invert_spec  
-        self.is_mixer_mode = model_data.is_mixer_mode  
-        self.secondary_model_scale = model_data.secondary_model_scale  
+        self.primary_stem = model_data.primary_stem
+        self.secondary_stem = model_data.secondary_stem
+        self.is_invert_spec = model_data.is_invert_spec
+        self.is_mixer_mode = model_data.is_mixer_mode
+        self.secondary_model_scale = model_data.secondary_model_scale
         self.primary_source_map = {}
         self.primary_source = None
         self.secondary_source = None
@@ -163,17 +205,15 @@ class SeparateAttributes:
     def running_inference_progress_bar(self, length, is_match_mix=False):
         if not is_match_mix:
             self.progress_value += 1
-
             if (0.8 / length * self.progress_value) >= 0.8:
                 length = self.progress_value + 1
-
             self.set_progress_bar(0.1, (0.8 / length * self.progress_value))
 
     def write_audio(self, stem_path, stem_source, samplerate):
         if isinstance(stem_source, np.ndarray):
             if stem_source.ndim == 2 and stem_source.shape[0] == 2 and stem_source.shape[1] > 2:
                 stem_source = stem_source.T
-                
+
         sf.write(stem_path, stem_source, samplerate, subtype=self.wav_type_set)
         save_format(stem_path, self.save_format, self.mp3_bit_set) if not self.is_ensemble_mode else None
         self.set_progress_bar(0.95)
@@ -256,6 +296,7 @@ class SeparateMDX(SeparateAttributes):
             self.primary_source = spec_utils.normalize(source, self.is_normalization).T
         self.primary_source_map = {self.primary_stem: self.primary_source}
         self.write_audio(primary_stem_path, self.primary_source, samplerate)
+
         if self.secondary_stem != NO_OTHER_STEM and self.primary_stem != NO_OTHER_STEM:
             self.write_to_console(f"{SAVING_STEM[0]}{self.secondary_stem}{SAVING_STEM[1]}")
 
@@ -406,6 +447,7 @@ class SeparateDemucs(SeparateAttributes):
             )
             self.demucs.to(self.device)
             self.demucs.eval()
+
         primary_stem_path = os.path.join(self.export_path, f"vocals.wav")
         secondary_stem_path = os.path.join(self.export_path, f"no_vocals.wav")
 
@@ -429,11 +471,7 @@ class SeparateDemucs(SeparateAttributes):
                 self.write_to_console(f"{SAVING_STEM[0]}{stem_name}{SAVING_STEM[1]}")
                 stem_path = os.path.join(self.export_path, f"{self.audio_file_base}_({stem_name}).wav")
                 stem_source = spec_utils.normalize(source[stem_value], self.is_normalization).T
-                self.write_audio(
-                    stem_path,
-                    stem_source,
-                    samplerate,
-                )
+                self.write_audio(stem_path, stem_source, samplerate)
 
         else:
             self.write_to_console(f"{SAVING_STEM[0]}{self.primary_stem}{SAVING_STEM[1]}")
@@ -459,15 +497,10 @@ class SeparateDemucs(SeparateAttributes):
 
                 self.secondary_source = secondary_source
 
-                self.write_audio(
-                    secondary_stem_path,
-                    secondary_source,
-                    samplerate,
-                )
+                self.write_audio(secondary_stem_path, secondary_source, samplerate)
 
     def demix_demucs(self, mix):
         processed = {}
-
         set_progress_bar = None if self.is_chunk_demucs else self.set_progress_bar
 
         for nmix in mix:
@@ -529,7 +562,7 @@ class SeparateVR(SeparateAttributes):
     def separate(self):
         device = torch.device(config.device)
 
-        nn_arch_sizes = [31191, 33966, 56817, 123821, 123812, 129605, 218409, 537238, 537227]  
+        nn_arch_sizes = [31191, 33966, 56817, 123821, 123812, 129605, 218409, 537238, 537227]
         vr_5_1_models = [56817, 218409]
         model_size = math.ceil(os.stat(self.model_path).st_size / 1024)
         nn_arch_size = min(nn_arch_sizes, key=lambda x: abs(x - model_size))
@@ -563,7 +596,6 @@ class SeparateVR(SeparateAttributes):
                 ).T
 
         self.primary_source_map = {self.primary_stem: self.primary_source}
-
         self.write_audio(primary_stem_path, self.primary_source, 44100)
 
         if self.secondary_stem != NO_OTHER_STEM and self.primary_stem != NO_OTHER_STEM:
@@ -576,7 +608,7 @@ class SeparateVR(SeparateAttributes):
                     resampled = librosa.resample(input_tensor, orig_sr=self.model_samplerate, target_sr=44100)
                     self.secondary_source = resampled.T
 
-            self.write_audio(secondary_stem_path, self.secondary_source, 44100)
+        self.write_audio(secondary_stem_path, self.secondary_source, 44100)
 
         torch.cuda.empty_cache()
 
@@ -593,7 +625,7 @@ class SeparateVR(SeparateAttributes):
             else:
                 wav_resolution = bp["res_type"]
 
-            if d == bands_n:  
+            if d == bands_n:
                 X_wave[d], _ = librosa.load(self.audio_file, bp["sr"], False, dtype=np.float32, res_type=wav_resolution)
 
                 if not np.any(X_wave[d]) and self.audio_file.endswith(".mp3"):
@@ -601,7 +633,7 @@ class SeparateVR(SeparateAttributes):
 
                 if X_wave[d].ndim == 1:
                     X_wave[d] = np.asarray([X_wave[d], X_wave[d]])
-            else:  
+            else:
                 X_wave[d] = librosa.resample(
                     X_wave[d + 1], self.mp.param["band"][d + 1]["sr"], bp["sr"], res_type=wav_resolution
                 )
@@ -711,7 +743,6 @@ class SeparateVR(SeparateAttributes):
 def gather_sources(primary_stem_name, secondary_stem_name, secondary_sources: dict):
     source_primary = False
     source_secondary = False
-
     for key, value in secondary_sources.items():
         if key in primary_stem_name:
             source_primary = value
@@ -724,7 +755,6 @@ def gather_sources(primary_stem_name, secondary_stem_name, secondary_sources: di
 def prepare_mix(mix, chunk_set, margin_set, mdx_net_cut=False, is_missing_mix=False):
     audio_path = mix
     samplerate = 44100
-
     if not isinstance(mix, np.ndarray):
         mix, samplerate = librosa.load(mix, mono=False, sr=44100)
     else:
@@ -739,8 +769,8 @@ def prepare_mix(mix, chunk_set, margin_set, mdx_net_cut=False, is_missing_mix=Fa
     # === [แก้ไขเพิ่มเติม]: ระบบกรองและตัดเสียงฮัมอัจฉริยะ (Hum & Rumble Removal Filter) ===
     try:
         from scipy.signal import iirnotch, filtfilt, butter
-        
-        # 1. ตัดเสียงฮัมจากกระแสไฟฟ้า (Power Line Hum) ที่ 50Hz และ 60Hz พร้อมกรอง Harmonics (100Hz, 120Hz, 150Hz, 180Hz)
+
+        # 1. ตัดเสียงฮัมจากกระแสไฟฟ้า (Power Line Hum) ที่ 50Hz และ 60Hz พร้อมกรอง Harmonics
         for base_freq in [50, 60]:
             for harmonic in range(1, 4):
                 notch_freq = base_freq * harmonic
@@ -748,12 +778,12 @@ def prepare_mix(mix, chunk_set, margin_set, mdx_net_cut=False, is_missing_mix=Fa
                     b, a = iirnotch(notch_freq, Q=40.0, fs=samplerate)
                     for ch in range(mix.shape[0]):
                         mix[ch] = filtfilt(b, a, mix[ch])
-        
-        # 2. ตัดเสียงหึ่งสั่นเครือความถี่ต่ำมาก (Sub-bass Rumble/Mud) ที่ต่ำกว่า 30Hz ออกไป
+
+        # 2. ตัดเสียงหึ่งสั่นเครือความถี่ต่ำมาก (Sub-bass Rumble/Mud) ที่ต่ำกว่า 30Hz
         b_hp, a_hp = butter(N=4, Wn=30.0, btype='highpass', fs=samplerate)
         for ch in range(mix.shape[0]):
             mix[ch] = filtfilt(b_hp, a_hp, mix[ch])
-            
+
         print("=== [Replay AI Patched]: Applied Hum & Rumble Removal Filters Successfully ===")
     except Exception as filter_err:
         print(f"Warning: Could not apply hum filter: {filter_err}")
@@ -795,7 +825,6 @@ def prepare_mix(mix, chunk_set, margin_set, mdx_net_cut=False, is_missing_mix=Fa
 def rerun_mp3(audio_file, sample_rate=44100):
     with audioread.audio_open(audio_file) as f:
         track_length = int(f.duration)
-
     return librosa.load(audio_file, duration=track_length, mono=False, sr=sample_rate)[0]
 
 
@@ -819,7 +848,7 @@ def save_format(audio_path, output_format, mp3_bit_set):
         if output_format == MP3:
             audio_path_mp3 = audio_path.replace(".wav", ".mp3")
             file.export(audio_path_mp3, format="mp3", bitrate=mp3_bit_set)
-            
+
         audio_path_preview = audio_path.replace(".wav", "_preview.mp3")
         file.export(audio_path_preview, format="mp3", bitrate="192k")
     except Exception as convert_err:

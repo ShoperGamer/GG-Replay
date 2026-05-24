@@ -1,5 +1,6 @@
 import os
 import time
+import shutil
 from functools import lru_cache
 from threading import Lock
 from typing import Callable
@@ -256,6 +257,93 @@ class Stemmer:
                     seperator = SeparateDemucs(model_data, process_data)
 
                 seperator.separate()
+
+                # =================================================================================
+                # 🔥 [FEATURE INSANE PATCH]: พิฆาตเสียงร้องประสาน ร้องซ้อน และเคลียร์ปัญหาร้องคู่พร้อมกัน
+                # สั่งการระบบท่อส่งแบบอนุกรมอัตโนมัติ (Cascade Sequential Lead Vocal Isolation)
+                # =================================================================================
+                if os.path.exists(vocal_file) and model_name not in ["UVR-MDX-NET Karaoke 2", "UVR-MDX-NET Main"]:
+                    write_to_console("กำลังเปิดใช้งานระบบประมวลผลอนุกรมขั้นสูง เพื่อกรองให้เหลือแต่เสียงร้องหลักบริสุทธิ์...")
+                    current_vocal_target = vocal_file
+
+                    # 🎯 ขั้นตอนที่ 1: ตัดเสียงร้องเสริม ประสาน แบคกราวด์โวคอล (Karaoke 2 Pass)
+                    kara_temp_dir = os.path.join(track_dir, "cascade_kara")
+                    os.makedirs(kara_temp_dir, exist_ok=True)
+                    kara_onnx = os.path.join(weights_dir, "UVR_MDXNET_KARA_2.onnx")
+
+                    if not os.path.exists(kara_onnx):
+                        write_to_console("กำลังดาวน์โหลดโมเดลคัดแยกเสียงร้องหลักจากเสียงประสาน (Karaoke 2)...")
+                        import requests
+                        for base_url in [
+                            "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/UVR_MDXNET_KARA_2.onnx",
+                            "https://huggingface.co/Anjok/model-repo/resolve/main/UVR_MDXNET_KARA_2.onnx"
+                        ]:
+                            try:
+                                res = requests.get(base_url, stream=True)
+                                if res.status_code == 200:
+                                    with open(kara_onnx, "wb") as f_k:
+                                        for chk in res.iter_content(chunk_size=8192):
+                                            f_k.write(chk)
+                                    break
+                            except:
+                                pass
+
+                    if os.path.exists(kara_onnx):
+                        write_to_console("-> ตรวจสอบความถี่และกำลังสลัดเสียงร้องเสริม/เสียงคอรัสประสาน...")
+                        model_data_k = ModelData("UVR-MDX-NET Karaoke 2", model_path=kara_onnx, selected_process_method=MDX_ARCH_TYPE)
+                        p_data_k = process_data.copy()
+                        p_data_k["audio_file"] = current_vocal_target
+                        p_data_k["export_path"] = kara_temp_dir
+                        
+                        sep_k = SeparateMDX(model_data_k, p_data_k)
+                        sep_k.separate()
+                        
+                        v_kara_out = os.path.join(kara_temp_dir, "vocals.wav")
+                        if os.path.exists(v_kara_out):
+                            current_vocal_target = v_kara_out
+
+                    # 🎯 ขั้นตอนที่ 2: จัดการปัญหาร้องคู่ ร้องซ้อนเหลื่อมไทม์ไลน์ ลบเสียงแทรกคู่ (Main Vocals Overlap Pass)
+                    main_temp_dir = os.path.join(track_dir, "cascade_main")
+                    os.makedirs(main_temp_dir, exist_ok=True)
+                    main_onnx = os.path.join(weights_dir, "UVR_MDXNET_Main.onnx")
+
+                    if not os.path.exists(main_onnx):
+                        write_to_console("กำลังดาวน์โหลดโมเดลแก้ไขปัญหาร้องทับซ้อนและร้องคู่ (MDX-Net Main)...")
+                        import requests
+                        for base_url in [
+                            "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/UVR_MDXNET_Main.onnx",
+                            "https://huggingface.co/Anjok/model-repo/resolve/main/UVR_MDXNET_Main.onnx"
+                        ]:
+                            try:
+                                res = requests.get(base_url, stream=True)
+                                if res.status_code == 200:
+                                    with open(main_onnx, "wb") as f_m:
+                                        for chk in res.iter_content(chunk_size=8192):
+                                            f_m.write(chk)
+                                    break
+                            except:
+                                pass
+
+                    if os.path.exists(main_onnx):
+                        write_to_console("-> จัดการระบบเมทริกซ์ลบการร้องซ้อนคู่และคลื่นเสียงแทรกสะท้อน...")
+                        model_data_m = ModelData("UVR-MDX-NET Main", model_path=main_onnx, selected_process_method=MDX_ARCH_TYPE)
+                        p_data_m = process_data.copy()
+                        p_data_m["audio_file"] = current_vocal_target
+                        p_data_m["export_path"] = main_temp_dir
+                        
+                        sep_m = SeparateMDX(model_data_m, p_data_m)
+                        sep_m.separate()
+                        
+                        v_main_out = os.path.join(main_temp_dir, "vocals.wav")
+                        if os.path.exists(v_main_out):
+                            current_vocal_target = v_main_out
+
+                    # เขียนไฟล์ล้างเสียงประสาน+เสียงร้องซ้อนทับกลับไปยังจุดส่งออกหลักของระบบ
+                    if current_vocal_target != vocal_file:
+                        shutil.copy2(current_vocal_target, vocal_file)
+                        write_to_console("=== คัดแยกเลเยอร์เสียงร้องหลักบริสุทธิ์ (Absolute Lead Vocals) เรียบร้อยแล้ว ===")
+                # =================================================================================
+
                 return vocal_file, no_vocals_wav
             finally:
                 config.device = orig_device

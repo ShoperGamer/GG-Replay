@@ -2,7 +2,7 @@
 """
 GG-Replay: Standalone Demucs AI Worker Engine (Ultimate Production Ready - Final)
 คัดแยกเลเยอร์เสียงดนตรี (Stems) รองรับการประมวลผลผ่าน GPU/CPU เต็มรูปแบบ
-แก้ไขปัญหา Matrix Shape Mismatch ของ HTDemucs ด้วยการใช้ Auto-Segment Natively
+แก้ไขปัญหา Matrix Shape Mismatch และรองรับ Dynamic Model Name Fallback ป้องกันการแครช
 """
 import argparse
 import json
@@ -117,6 +117,13 @@ def separate_with_demucs(config: dict):
     emit_progress("processing", "กำลังดึงข้อมูลโครงสร้างโมเดลระบบ Demucs...", 10)
     device = setup_device(device_pref)
 
+    # 🚀 === [แก้ไขเพิ่มเติม]: ระบบตรวจสอบและสลับชื่อโมเดลเพื่อป้องกันการแครช (Dynamic Model Fallback) ===
+    valid_demucs_models = ["htdemucs", "htdemucs_ft", "htdemucs_6s", "hdemucs_mmi", "demucs", "demucs_extra"]
+    if model_name not in valid_demucs_models:
+        logger.warning(f"⚠️ ตรวจพบชื่อคอนฟิก '{model_name}' ซึ่งไม่ใช่สถาปัตยกรรมของ Demucs ระบบจะสลับไปใช้โครงสร้างมาตรฐาน 'htdemucs_ft' อัตโนมัติ เพื่อป้องกันระบบแครช")
+        model_name = "htdemucs_ft"
+    # ==============================================================================================
+
     try:
         logger.info(f"Loading Demucs architecture: {model_name}")
         model = get_model(model_name)
@@ -136,13 +143,13 @@ def separate_with_demucs(config: dict):
         emit_progress("errored", f"ไม่สามารถเปิดอ่านไฟล์มัลติมีเดียได้: {e}")
         raise
 
-    emit_progress("processing", "กำลังคัดแยกเลเยอร์แทร็กดนตรีด้วยการ์ดจอ RTX 3050...", 50)
+    emit_progress("processing", "กำลังคัดแยกเลเยอร์แทร็กดนตรีและสกัดคลื่นเสียงโวคอล...", 50)
 
     try:
         ref = wav.mean(0)
         wav_normalized = (wav - ref.mean()) / ref.std()
         
-        # 🎯 [CRITICAL FIX]: นำคำสั่ง segment=10 ออก เพื่อปล่อยให้ Demucs 
+        # 🎯 [CRITICAL FIX]: นำคำสั่ง segment ออก เพื่อปล่อยให้ Demucs 
         # ใช้ขนาดหน้าต่าง 7.8 วินาทีของมันเองโดยตรง ป้องกันเมทริกซ์แครชในชั้นเลเยอร์ Transformer
         sources = apply_model(
             model,
@@ -187,6 +194,48 @@ def separate_with_demucs(config: dict):
             emit_progress("processing", f"กำลังเขียนบันทึกไฟล์ไลน์ดนตรี: {stem_name}...", progress_step)
         except Exception as e:
             logger.error(f"Failed to write stem file '{stem_name}': {e}")
+
+    # =================================================================================
+    # 🔥 [DEMUCS VOCAL CASCADE INJECTION]: ท่อส่งดักจับกรองเฉพาะเสียงร้องหลักบริสุทธิ์
+    # ทำลายไลน์ร้องเสริม ประสาน คอรัส และล้างปัญหาร้องคู่ทับซ้อนพร้อมกันให้เหลือเสียงคนร้องเดี่ยวหลัก
+    # =================================================================================
+    if "vocals" in stems and os.path.exists(stems["vocals"]):
+        vocal_path = stems["vocals"]
+        emit_progress("processing", "ตรวจพบเสียงร้อง Demucs กำลังนำเข้าสู่ท่อส่งคัดแยกเสียงร้องหลักบริสุทธิ์...", 95)
+        try:
+            from inference.stemmer import Stemmer
+            import shutil
+            
+            # คำนวณหาตำแหน่งโฟลเดอร์สำหรับโมเดลน้ำหนักเครือข่าย ONNX หลังบ้าน
+            base_p_dir = os.path.abspath(os.path.join(current_dir, ".."))
+            weights_dir = os.path.join(base_p_dir, "data", "models")
+            
+            # ท่อกรองขั้นที่ 1: ตัดเสียงร้องเสริมและคอรัสประสานแบคกราวด์โวคอล (Karaoke 2 Pass)
+            Stemmer.separate_track(
+                source_audio_path=vocal_path,
+                output_directory=os.path.dirname(vocal_path),
+                weights_dir=weights_dir,
+                model_name="UVR-MDX-NET Karaoke 2",
+                device=device_pref
+            )
+            k_res = os.path.join(os.path.dirname(vocal_path), "UVRMDXNETKaraoke2", "vocals", "vocals.wav")
+            
+            if os.path.exists(k_res):
+                # ท่อกรองขั้นที่ 2: ลบไลน์เสียงร้องคู่ออกเมื่อร้องพร้อมกันสองคน (Main Vocals Overlap Pass)
+                Stemmer.separate_track(
+                    source_audio_path=k_res,
+                    output_directory=os.path.dirname(vocal_path),
+                    weights_dir=weights_dir,
+                    model_name="UVR-MDX-NET Main",
+                    device=device_pref
+                )
+                m_res = os.path.join(os.path.dirname(vocal_path), "UVRMDXNETMain", "vocals", "vocals.wav")
+                if os.path.exists(m_res):
+                    shutil.copy2(m_res, vocal_path)
+                    logger.info("=== [Demucs Core Cascade]: Absolute Lead Vocal Cleaned Successfully ===")
+        except Exception as cascade_err:
+            logger.error(f"Demucs post-process vocal cascade pipeline error: {cascade_err}")
+    # =================================================================================
 
     emit_progress("completed", "ระบบคัดแยกเลเยอร์เสียงเสร็จสิ้นสมบูรณ์แล้ว!", 100, stems=stems)
     if device == "cuda":

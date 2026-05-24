@@ -1,26 +1,97 @@
-setuptools>=65.5.0
-audioread==3.0.0
-diffq==0.2.4
-einops==0.6.1
-fairseq==0.12.2
-faiss-cpu==1.7.4
-julius==0.2.7
+# =====================================================================
+# GG-Replay: Production Dependencies
+# อัปเดต: 2026-05-25 | Python 3.10+ | CUDA 12.1
+# =====================================================================
+
+# =====================================================================
+# 🧠 CORE ML FRAMEWORK (PyTorch + CUDA 12.1)
+# =====================================================================
+# ⚠️ ติดตั้งแยกด้วยคำสั่ง:
+# pip install torch==2.5.1 torchaudio==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+#
+# (ไม่ใส่ใน requirements.txt โดยตรง เพราะต้องระบุ index-url เฉพาะ)
+
+# =====================================================================
+# 🎵 AUDIO PROCESSING
+# =====================================================================
 librosa==0.9.1
-numpy==1.23.5
-psutil==5.9.5
-omegaconf==2.0.6
-praat-parselmouth==0.4.3
-pydub==0.25.1
-pyinstaller==5.13.0
-pytorch-lightning==2.0.6
-pyworld==0.3.4
-PyYAML==6.0.1
-scipy==1.11.1
 soundfile==0.12.1
-torch==2.0.1
-torchaudio==2.0.2
-torchcrepe==0.0.21
-onnxruntime==1.16.3
+audioread==3.0.0
+pydub==0.25.1
+pyworld==0.3.4
+praat-parselmouth==0.4.3
 pyrubberband==0.3.0; sys_platform == 'win32'
+resampy==0.4.3
+julius==0.2.7
+
+# =====================================================================
+# 🤖 AI MODELS & INFERENCE
+# =====================================================================
+# Demucs - แยกเสียงร้อง/ดนตรี
 demucs>=4.0.0
-pydantic>=2.0.0
+
+# RVC & F0 Extraction
+torchcrepe==0.0.21
+faiss-cpu==1.7.4
+fairseq==0.12.2
+
+# PyTorch Lightning (สำหรับ training utilities)
+pytorch-lightning==2.0.6
+torchmetrics==1.9.0
+
+# =====================================================================
+# 🔢 NUMERICAL & SCIENTIFIC
+# =====================================================================
+numpy==1.23.5
+scipy==1.11.1
+numba==0.65.0
+einops==0.6.1
+diffq==0.2.4
+
+# =====================================================================
+# ⚙️ CONFIGURATION & UTILITIES
+# =====================================================================
+PyYAML==6.0.1
+omegaconf==2.0.6
+hydra-core==1.0.7
+psutil==5.9.5
+tqdm==4.67.3
+joblib==1.5.3
+filelock==3.25.2
+typing_extensions==4.15.0
+
+# =====================================================================
+# 🌐 NETWORKING & HTTP
+# =====================================================================
+requests==2.33.1
+aiohttp==3.13.5
+httpx==0.28.1
+certifi==2026.2.25
+urllib3==2.6.3
+
+# =====================================================================
+# 📝 DATA VALIDATION
+# =====================================================================
+pydantic==2.13.4
+annotated-types==0.7.0
+
+# =====================================================================
+# 🎨 OPTIONAL: EXTRA FEATURES (สามารถลบออกได้ถ้าไม่ใช้)
+# =====================================================================
+# HuggingFace Hub (สำหรับ download models)
+huggingface_hub==1.14.0
+
+# Rich console output
+rich==15.0.0
+
+# =====================================================================
+# 🖥️ BUILD & PACKAGING
+# =====================================================================
+pyinstaller==5.13.0
+pyinstaller-hooks-contrib==2026.4
+setuptools>=68.0.0
+wheel==0.47.0
+altgraph==0.17.5
+pefile==2024.8.26
+pywin32-ctypes==0.2.3; sys_platform == 'win32'
+pywin32==311; sys_platform == 'win32'

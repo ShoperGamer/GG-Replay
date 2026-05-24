@@ -6,6 +6,18 @@ export function CreateSong(arg1, arg2, arg3) {
   return window['go']['main']['App']['CreateSong'](arg1, arg2, arg3);
 }
 
+export function DeleteAllAICovers() {
+  return window['go']['main']['App']['DeleteAllAICovers']();
+}
+
+export function DeleteAllOriginals() {
+  return window['go']['main']['App']['DeleteAllOriginals']();
+}
+
+export function DeleteAllSeparated() {
+  return window['go']['main']['App']['DeleteAllSeparated']();
+}
+
 export function DeleteLocalFile(arg1, arg2) {
   return window['go']['main']['App']['DeleteLocalFile'](arg1, arg2);
 }
@@ -20,6 +32,10 @@ export function DownloadFile(arg1, arg2) {
 
 export function GetAICoverFiles() {
   return window['go']['main']['App']['GetAICoverFiles']();
+}
+
+export function GetAudioCleanupSettings() {
+  return window['go']['main']['App']['GetAudioCleanupSettings']();
 }
 
 export function GetAudioUrl(arg1, arg2) {
@@ -64,6 +80,10 @@ export function GetStoredModels() {
 
 export function MergeAudio(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['MergeAudio'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function SaveAudioCleanupSettings(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SaveAudioCleanupSettings'](arg1, arg2, arg3, arg4);
 }
 
 export function SaveDeviceSetting(arg1) {
