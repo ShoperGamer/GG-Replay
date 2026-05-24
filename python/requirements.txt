@@ -43,7 +43,7 @@ torchmetrics==1.9.0
 # 🔢 NUMERICAL & SCIENTIFIC
 # =====================================================================
 numpy==1.23.5
-scipy==1.11.1
+scipy==1.17.1
 numba==0.65.0
 einops==0.6.1
 diffq==0.2.4
