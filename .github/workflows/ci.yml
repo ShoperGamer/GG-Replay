@@ -155,7 +155,7 @@ jobs:
           go tool cover -func=coverage-go.out
 
       - name: Upload Go coverage
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v6
         with:
           file: ./coverage-go.out
           flags: go
@@ -187,7 +187,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload Python coverage
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v6
         with:
           file: ./python/coverage.xml
           flags: python
