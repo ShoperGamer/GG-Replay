@@ -170,4 +170,4 @@ ffmpeg.exe
 ffprobe.exe
 vendor/
 data/*
-logs/*.log
+data/logs/*.log

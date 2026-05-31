@@ -22,7 +22,7 @@ block_cipher = None
 
 
 a = Analysis(
-    ['server.py'],
+    ['run_job.py'],
     pathex=[],
     binaries=binaries,
     datas=datas,

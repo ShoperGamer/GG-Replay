@@ -132,11 +132,11 @@ status.go          // ติดตามสถานะ: queue position, progres
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                          GG-Replay Architecture                          │
+│                          GG-Replay Architecture                         │
 └─────────────────────────────────────────────────────────────────────────┘
 
-┌─────────────────┐         ┌──────────────────────────────────────────┐
-│    Frontend     │         │            Go Backend (Wails)             │
+┌─────────────────┐         ┌─────────────────────────────────────────┐
+│    Frontend     │         │            Go Backend (Wails)           │
 │  (React + TS)   │◄───────►│  ┌────────────────────────────────────┐ │
 │  frontend/      │  wails  │  │  app.go          (Main Bindings)   │ │
 │                 │   JS    │  │  server.go       (HTTP Server)     │ │
@@ -144,30 +144,29 @@ status.go          // ติดตามสถานะ: queue position, progres
 │  - pages/       │         │  │  models.go       (Model Manager)   │ │
 │  - assets/      │         │  │  device.go       (GPU/CPU Check)   │ │
 └─────────────────┘         │  └────────────────────────────────────┘ │
-        │                   │                                          │
+        │                   │                                         │
         │ reads/writes      │  ┌────────────────────────────────────┐ │
         ▼                   │  │  initialization/                   │ │
-┌─────────────────┐         │  │  └─ initialization.go (Startup)   │ │
+┌─────────────────┐         │  │  └─ initialization.go (Startup)    │ │
 │   Local Data    │         │  └────────────────────────────────────┘ │
-│    data/        │         │                                          │
+│    data/        │         │                                         │
 │  - models/      │         │  ┌────────────────────────────────────┐ │
 │  - uploads/     │         │  │  inference/                        │ │
-│  - outputs/     │         │  │  ├─ config.go        (Config)     │ │
-└─────────────────┘         │  │  ├─ manager.go       (Lifecycle)  │ │
-                            │  │  ├─ options.go       (Params)     │ │
-                            │  │  ├─ file_utils.go    (I/O)        │ │
-                            │  │  ├─ python_bridge.go (IPC)        │ │
-                            │  │  └─ status.go        (Tracking)   │ │
+│  - outputs/     │         │  │  ├─ config.go        (Config)      │ │
+└─────────────────┘         │  │  ├─ manager.go       (Lifecycle)   │ │
+                            │  │  ├─ options.go       (Params)      │ │
+                            │  │  ├─ file_utils.go    (I/O)         │ │
+                            │  │  ├─ python_bridge.go (IPC)         │ │
+                            │  │  └─ status.go        (Tracking)    │ │
                             │  └────────────┬───────────────────────┘ │
                             └───────────────┼─────────────────────────┘
                                             │ HTTP/IPC
                                             ▼
                             ┌────────────────────────────────────┐
-                            │      Python AI Server               │
+                            │      Python AI Server              │
                             │  ┌──────────────────────────────┐  │
-                            │  │  server.py     (FastAPI)     │  │
                             │  │  inference/                  │  │
-                            │  │  ├─ uvr/       (Vocal Sep.) │  │
+                            │  │  ├─ uvr/       (Vocal Sep.)  │  │
                             │  │  └─ infer_pack/(RVC)         │  │
                             │  │  demucs/       (Track Sep.)  │  │
                             │  └──────────────────────────────┘  │
@@ -205,23 +204,23 @@ status.go          // ติดตามสถานะ: queue position, progres
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    GITHUB ACTIONS CI/CD                      │
+│                    GITHUB ACTIONS CI/CD                     │
 ├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  📥 Trigger: Push/PR → ci.yml                                │
+│                                                             │
+│  📥 Trigger: Push/PR → ci.yml                               │
 │     ├─ 🔍 Lint & Format (Go, TS, Python)                    │
-│     ├─ 🧪 Unit Tests (ทุกภาษา)                               │
+│     ├─ 🧪 Unit Tests (ทุกภาษา)                              │
 │     ├─ 🏗️ Build Check (ทุก platform)                        │
 │     └─ 🛡️ Security Scan                                     │
 │                                                              │
-│  🏷️ Trigger: Tag v* → release.yml                            │
+│  🏷️ Trigger: Tag v* → release.yml                           │
 │     ├─ 📦 Build Windows (.exe + NSIS installer)             │
-│     ├─ 📦 Build macOS (.app + .dmg)                          │
+│     ├─ 📦 Build macOS (.app + .dmg)                         │
 │     └─ 🚀 Upload to GitHub Releases                         │
-│                                                              │
-│  🔄 Weekly → security.yml                                    │
-│     └─ 🔐 Dependency vulnerability scan                      │
-│                                                              │
+│                                                             │
+│  🔄 Weekly → security.yml                                   │
+│     └─ 🔐 Dependency vulnerability scan                     │
+│                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -344,5 +343,5 @@ wails build -upx -clean -m
 
 ## 📝 License
 
-ข้อมูลเกี่ยวกับลิขสิทธิ์และข้อตกลงการใช้งาน (ดูรายละเอียดเพิ่มเติมในโฟลเดอร์ `License-Markdown/`)
+ข้อมูลเกี่ยวกับลิขสิทธิ์และข้อตกลงการใช้งาน (ดูรายละเอียดเพิ่มเติมในโฟลเดอร์ `License-Markdown/`) (https://github.com/ShoperGamer/GG-Replay/tree/main/License-Markdown)
 

@@ -1,1 +1,1 @@
-{"device":"cuda"}
+{"aggressiveCleanup":false,"applyPostProcessing":true,"device":"cuda","removeBackingVocals":true,"removeHum":true}

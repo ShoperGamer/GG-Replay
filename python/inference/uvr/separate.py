@@ -849,7 +849,7 @@ def save_format(audio_path, output_format, mp3_bit_set):
             audio_path_mp3 = audio_path.replace(".wav", ".mp3")
             file.export(audio_path_mp3, format="mp3", bitrate=mp3_bit_set)
 
-        audio_path_preview = audio_path.replace(".wav", "_preview.mp3")
-        file.export(audio_path_preview, format="mp3", bitrate="192k")
+       # audio_path_preview = audio_path.replace(".wav", "_preview.mp3")
+       # file.export(audio_path_preview, format="mp3", bitrate="192k")
     except Exception as convert_err:
         print(f"Error during save_format audio conversion for {audio_path}: {convert_err}")

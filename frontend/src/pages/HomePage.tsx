@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import * as Wails from '../../wailsjs/go/main/App'; 
+import * as Wails from '../../wailsjs/go/main/App';
 
 interface SongOptions {
   pitch: number;
@@ -16,84 +16,57 @@ interface SongOptions {
   outputFormat: string;
   volumeEnvelope: number;
   outputName: string;
-  device: string; 
-  gpu: boolean;   
-  // ⚡ แก้ไขปัญหา TS2345: เพิ่มคุณสมบัติสำหรับระบบ Audio Cleanup รองรับหลังบ้าน
+  device: string;
+  gpu: boolean;
   removeHum: boolean;
   removeBackingVocals: boolean;
   applyPostProcessing: boolean;
   aggressiveCleanup: boolean;
 }
 
-const HomePage: React.FC = () => {
+type DeviceType = 'cuda' | 'mps' | 'cpu';
+
+export default function HomePage() {
   const [models, setModels] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
-  const [audioFile, setAudioFile] = useState<{name: string, path: string} | null>(null);
-  const [outputFile, setOutputFile] = useState<{name: string, path: string, fullPath: string} | null>(null);
+  const [audioFile, setAudioFile] = useState<{ name: string; path: string } | null>(null);
+  const [outputFile, setOutputFile] = useState<{ name: string; path: string; fullPath: string } | null>(null);
   const [pitch, setPitch] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = useState(0);
-
-  const [showWizard, setShowWizard] = useState(false);
-  const [activeDevice, setActiveDevice] = useState('cuda');
-  const [wizardSelection, setWizardSelection] = useState('cuda');
-
+  const [progressMessage, setProgressMessage] = useState('');
+  const [activeDevice, setActiveDevice] = useState<DeviceType>('cuda');
   const [showFilenameModal, setShowFilenameModal] = useState(false);
   const [customFilename, setCustomFilename] = useState('');
-
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  
+  // Quick Settings
+  const [outputFormat, setOutputFormat] = useState('mp3_320k');
+  const [f0Method, setF0Method] = useState('rmvpe');
+  
+  // Advanced Settings
   const [deEchoDeReverb, setDeEchoDeReverb] = useState(false);
   const [instrumentalsPitch, setInstrumentalsPitch] = useState(0);
-  const [f0Method, setF0Method] = useState('rmvpe');
-  const [outputFormat, setOutputFormat] = useState('mp3_192k');
-  
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [indexRatio, setIndexRatio] = useState(0.45); 
-  const [consonantProtection, setConsonantProtection] = useState(0.40); 
+  const [indexRatio, setIndexRatio] = useState(0.45);
+  const [consonantProtection, setConsonantProtection] = useState(0.40);
   const [volumeEnvelope, setVolumeEnvelope] = useState(1.0);
-  
   const [stemmingMethod, setStemmingMethod] = useState('UVR-MDX-NET-Voc_FT');
-
-  // 🧼 เพิ่ม React States สำหรับเก็บค่าควบคุมการล้างสัญญาณเสียงคลีนนิ่งจากหน้า UI
+  
+  // Audio Cleanup
   const [removeHum, setRemoveHum] = useState(true);
   const [removeBackingVocals, setRemoveBackingVocals] = useState(true);
   const [applyPostProcessing, setApplyPostProcessing] = useState(true);
   const [aggressiveCleanup, setAggressiveCleanup] = useState(false);
-
+  
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     loadModels();
-    checkHardwareSetting();
-
+    loadDeviceSetting();
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, []);
-
-  const checkHardwareSetting = async () => {
-    try {
-      const savedDevice = await (Wails as any).GetDeviceSetting();
-      if (!savedDevice) {
-        setShowWizard(true);
-      } else {
-        setActiveDevice(savedDevice);
-        setWizardSelection(savedDevice);
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const handleSaveHardware = async () => {
-    try {
-      await (Wails as any).SaveDeviceSetting(wizardSelection);
-      setActiveDevice(wizardSelection);
-      setShowWizard(false);
-      alert("ปรับค่าฮาร์ดแวร์เสร็จสิ้น!");
-    } catch (err) {
-      alert("Error saving setting");
-    }
-  };
 
   const loadModels = async () => {
     try {
@@ -104,380 +77,592 @@ const HomePage: React.FC = () => {
     }
   };
 
+  const loadDeviceSetting = async () => {
+    try {
+      const saved = await (Wails as any).GetDeviceSetting();
+      if (saved && ['cuda', 'mps', 'cpu'].includes(saved)) {
+        setActiveDevice(saved as DeviceType);
+      }
+    } catch {}
+  };
+
+  const handleSaveDevice = async (device: DeviceType) => {
+    setActiveDevice(device);
+    try {
+      await (Wails as any).SaveDeviceSetting(device);
+    } catch {}
+  };
+
   const handleSelectAudio = async () => {
     try {
       const res = await Wails.SelectAndSaveAudio();
-      if (res && res.name) {
-        const streamUrl = await (Wails as any).GetAudioUrl(res.name, "uploads");
+      if (res?.name) {
+        const streamUrl = await (Wails as any).GetAudioUrl(res.name, 'uploads');
         setAudioFile({ name: res.name, path: streamUrl });
       }
-    } catch (err) {
-      alert("เกิดข้อผิดพลาดในการเลือกไฟล์เสียงร้อง");
+    } catch {
+      alert('เกิดข้อผิดพลาดในการเลือกไฟล์เสียง');
     }
   };
 
-  const adjustValue = (current: number, step: number, min: number, max: number, setter: (v: number) => void) => {
-    const next = parseFloat((current + step).toFixed(2));
-    if (next >= min && next <= max) setter(next);
-  };
-
   const handleOpenFilenameModal = () => {
-    if (!audioFile || !selectedModel) return alert("กรุณาเลือกโมเดลและไฟล์เสียงร้องก่อน");
-    
-    const baseName = audioFile.name.replace(/\.[^/.]+$/, "");
+    if (!audioFile || !selectedModel) {
+      return alert('กรุณาเลือกโมเดลและไฟล์เสียงก่อน');
+    }
+    const baseName = audioFile.name.replace(/\.[^/.]+$/, '');
     setCustomFilename(`${baseName}_cover`);
     setShowFilenameModal(true);
   };
 
   const handleRunInference = async () => {
-    if (!audioFile) return;
-    if (!customFilename.trim()) return alert("กรุณาระบุชื่อไฟล์ผลลัพธ์ด้วยครับ");
-    
+    if (!audioFile || !customFilename.trim()) return;
     setShowFilenameModal(false);
     setIsLoading(true);
     setProgress(0);
-    setOutputFile(null); 
+    setProgressMessage('กำลังเริ่มต้น...');
+    setOutputFile(null);
 
     if (intervalRef.current) clearInterval(intervalRef.current);
 
     try {
-      // 🛠️ ประกอบออปชันให้ครบถ้วนตามโครงสร้าง Type ที่หลังบ้านต้องการร้อยเปอร์เซ็นต์
       const options: SongOptions = {
-        pitch: pitch,
-        instrumentalsPitch: instrumentalsPitch,
-        preStemmed: true, 
+        pitch,
+        instrumentalsPitch,
+        preStemmed: true,
         vocalsOnly: false,
         sampleMode: false,
-        deEchoDeReverb: deEchoDeReverb,
+        deEchoDeReverb,
         sampleModeStartTime: 0,
-        f0Method: f0Method,
-        stemmingMethod: stemmingMethod,
-        indexRatio: indexRatio,
-        consonantProtection: consonantProtection,
-        outputFormat: outputFormat,
-        volumeEnvelope: volumeEnvelope,
+        f0Method,
+        stemmingMethod,
+        indexRatio,
+        consonantProtection,
+        outputFormat,
+        volumeEnvelope,
         outputName: customFilename.trim(),
-        device: activeDevice,              
+        device: activeDevice,
         gpu: activeDevice === 'cuda',
-        removeHum: removeHum,
-        removeBackingVocals: removeBackingVocals,
-        applyPostProcessing: applyPostProcessing,
-        aggressiveCleanup: aggressiveCleanup
+        removeHum,
+        removeBackingVocals,
+        applyPostProcessing,
+        aggressiveCleanup,
       };
 
       const jobId = await Wails.CreateSong(selectedModel, audioFile.name, options);
-      if (!jobId) throw new Error("ไม่สามารถเริ่มการประมวลผลได้");
+      if (!jobId) throw new Error('ไม่สามารถเริ่มการประมวลผลได้');
 
       intervalRef.current = setInterval(async () => {
         try {
           const jobStatus: any = await Wails.GetJobProgress(jobId);
-          
-          if (jobStatus) {
-             let realProgress = 0;
-             const msg = jobStatus.message ? jobStatus.message.toLowerCase() : "";
+          if (!jobStatus) return;
 
-             if (jobStatus.status === 'success' || jobStatus.status === 'completed') {
-               realProgress = 100;
-             } else if (msg.includes("writing completed file") || msg.includes("mixing converted vocals")) {
-               realProgress = 90;
-             } else if (msg.includes("loading converted vocal")) {
-               realProgress = 75;
-             } else if (msg.includes("creating audio files")) {
-               realProgress = 55;
-             } else if (msg.includes("starting inference") || msg.includes("performing inference")) {
-               realProgress = 30;
-             } else if (msg.includes("loading model")) {
-               realProgress = 15;
-             } else if (jobStatus.status === 'processing') {
-               realProgress = 5;
-             }
+          const msg = (jobStatus.message || '').toLowerCase();
+          let realProgress = 0;
 
-             setProgress(realProgress);
-             
-             if (jobStatus.status === 'success' || jobStatus.status === 'completed') {
-               if (intervalRef.current) clearInterval(intervalRef.current);
-               setIsLoading(false);
-               setProgress(100);
-               
-               if (jobStatus.outputFilepath) {
-                  const streamOutputUrl = await (Wails as any).GetAudioUrlByFullPath(jobStatus.outputFilepath);
-                  const outName = jobStatus.outputFilepath.split(/[\\/]/).pop() || "converted_vocals.wav";
-                  setOutputFile({ name: outName, path: streamOutputUrl, fullPath: jobStatus.outputFilepath });
-               }
-               alert("แปลงน้ำเสียง AI Cover เสร็จสมบูรณ์! เชิญก้าวเข้าสู่เมนูพรีเซนต์รวมเสียงถัดไปได้เลย");
-             } else if (jobStatus.status === 'failed' || jobStatus.status === 'errored') {
-               if (intervalRef.current) clearInterval(intervalRef.current);
-               setIsLoading(false);
-               alert("การประมวลผลล้มเหลว: " + (jobStatus.error || "Unknown Inference Error"));
-             }
+          if (jobStatus.status === 'completed' || jobStatus.status === 'success') {
+            realProgress = 100;
+          } else if (msg.includes('writing') || msg.includes('mixing')) {
+            realProgress = 90;
+          } else if (msg.includes('loading converted')) {
+            realProgress = 75;
+          } else if (msg.includes('creating audio')) {
+            realProgress = 55;
+          } else if (msg.includes('inference')) {
+            realProgress = 30;
+          } else if (msg.includes('loading model')) {
+            realProgress = 15;
+          } else if (jobStatus.status === 'processing') {
+            realProgress = 5;
           }
-        } catch (loopErr) {
-          console.error("Error polling job progress:", loopErr);
+
+          setProgress(realProgress);
+          setProgressMessage(jobStatus.message || 'กำลังประมวลผล...');
+
+          if (jobStatus.status === 'completed' || jobStatus.status === 'success') {
+            if (intervalRef.current) clearInterval(intervalRef.current);
+            setIsLoading(false);
+            setProgress(100);
+
+            if (jobStatus.outputFilepath) {
+              const streamUrl = await (Wails as any).GetAudioUrlByFullPath(jobStatus.outputFilepath);
+              const outName = jobStatus.outputFilepath.split(/[\\/]/).pop() || 'converted.wav';
+              setOutputFile({ name: outName, path: streamUrl, fullPath: jobStatus.outputFilepath });
+            }
+          } else if (jobStatus.status === 'errored' || jobStatus.status === 'failed') {
+            if (intervalRef.current) clearInterval(intervalRef.current);
+            setIsLoading(false);
+            alert('การประมวลผลล้มเหลว: ' + (jobStatus.message || jobStatus.error || 'Unknown Error'));
+          }
+        } catch (err) {
+          console.error(err);
           if (intervalRef.current) clearInterval(intervalRef.current);
           setIsLoading(false);
         }
       }, 1500);
-
     } catch (err) {
       setIsLoading(false);
-      alert("Error: " + err);
+      alert('Error: ' + err);
     }
   };
 
+  const canStart = audioFile && selectedModel && !isLoading;
+  const step1Done = !!selectedModel;
+  const step2Done = !!audioFile;
+
   return (
-    <div className="max-w-5xl mx-auto animate-fadeIn text-slate-200 p-6 relative">
-      
-      <div className="flex flex-col sm:flex-row items-center justify-between mb-8 pb-4 border-b border-white/5">
+    <div className="max-w-5xl mx-auto space-y-6 animate-fadeIn text-slate-200 p-4 pb-24">
+      {/* Header */}
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-black text-white uppercase tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
-            RVC Voice Conversion Studio
+          <h1 className="text-3xl font-black text-white uppercase tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-purple-400">
+            🎤 RVC Voice Studio
           </h1>
+          <p className="text-sm text-slate-400 mt-1">
+            แปลงเสียงร้องด้วย AI — เลือกโมเดล → เลือกไฟล์ → แปลง
+          </p>
         </div>
-        <button 
-          onClick={() => setShowWizard(true)}
-          className={`mt-4 sm:mt-0 flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold border cursor-pointer transition-all hover:scale-105 active:scale-[0.95] ${
-            activeDevice === 'cuda' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
-          }`}
-        >
-          {activeDevice === 'cuda' ? '⚡ NVIDIA GPU (CUDA)' : '💻 CPU RENDER'}
-          <span className="text-[10px] opacity-60 underline pl-1">(เปลี่ยน)</span>
-        </button>
-      </div>
-      
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-1 space-y-4">
-          <div className="glass-card p-5 rounded-2xl border border-white/5 bg-slate-950/40 backdrop-blur shadow-xl">
-            <label className="block text-xs font-bold text-indigo-400 uppercase tracking-widest mb-2.5">Voice Model Target</label>
-            <select 
-              className="w-full bg-slate-900 text-white rounded-xl p-3 text-sm outline-none border border-white/10 focus:border-indigo-500 transition-all cursor-pointer"
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-            >
-              <option value="">-- เลือกโมเดลเสียง --</option>
-              {models.map(m => <option key={m} value={m}>{m}</option>)}
-            </select>
-          </div>
-
-          <div className="glass-card p-5 rounded-2xl border border-white/5 bg-slate-950/40 backdrop-blur shadow-xl">
-            <div className="flex justify-between mb-3">
-              <label className="text-xs font-bold text-indigo-400 uppercase tracking-widest">Pitch Transpose</label>
-              <span className="px-2.5 py-0.5 bg-indigo-500/20 text-indigo-300 font-mono text-xs rounded-full font-bold">
-                {pitch > 0 ? `+${pitch} SEMI` : pitch === 0 ? 'ORIGINAL' : `${pitch} SEMI`}
-              </span>
-            </div>
-            <input 
-              type="range" min="-12" max="12" 
-              className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500" 
-              value={pitch} 
-              onChange={(e) => setPitch(parseInt(e.target.value))}
-            />
-          </div>
-        </div>
-
-        <div className="lg:col-span-2 space-y-6">
-          <div 
-            onClick={handleSelectAudio}
-            className={`glass-card h-32 rounded-3xl border-dashed border-2 transition-all flex flex-col items-center justify-center cursor-pointer shadow-xl ${
-              audioFile ? 'border-indigo-500/40 bg-indigo-500/5' : 'border-white/10 hover:border-indigo-500/30 bg-slate-950/10'
+        
+        {/* Device Selector */}
+        <div className="flex gap-1 p-1 bg-slate-900/60 rounded-xl border border-white/5">
+          <button
+            onClick={() => handleSaveDevice('cuda')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+              activeDevice === 'cuda'
+                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                : 'text-slate-500 hover:text-slate-300'
             }`}
           >
-            {audioFile ? (
-              <div className="text-center p-4">
-                <p className="text-white font-semibold truncate max-w-sm px-4 text-sm">🎵 {audioFile.name}</p>
-                <button className="text-[11px] text-slate-400 hover:text-indigo-400 mt-1 underline">คลิกเพื่อเปลี่ยนไฟล์เสียงร้องเดี่ยว</button>
-              </div>
-            ) : (
-              <p className="text-slate-400 text-xs font-medium">กดเลือกไฟล์เสียงร้องนำ (แนะนำแยกคัดกรองเสียงประสานออกแล้ว)</p>
-            )}
-          </div>
-
-          <div className="glass-card p-5 rounded-3xl border border-white/5 bg-slate-950/30 backdrop-blur space-y-4 shadow-2xl">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-slate-900/60 p-3.5 rounded-xl border border-white/5 flex items-center justify-between">
-                <div>
-                  <h4 className="text-xs font-bold text-white">De-Echo & Reverb</h4>
-                  <p className="text-[10px] text-slate-400">ล้างเศษเอฟเฟกต์สะท้อนของห้องร้องเพลง</p>
-                </div>
-                <button onClick={() => setDeEchoDeReverb(!deEchoDeReverb)} className={`w-10 h-6 flex items-center rounded-full p-1 cursor-pointer transition-all ${deEchoDeReverb ? 'bg-indigo-600 justify-end' : 'bg-slate-800 justify-start'}`}><span className="bg-white w-4 h-4 rounded-full shadow-md" /></button>
-              </div>
-
-              <div className="bg-slate-900/60 p-3.5 rounded-xl border border-white/5 flex items-center justify-between">
-                <div>
-                  <h4 className="text-xs font-bold text-white">Instrumental Pitch</h4>
-                  <p className="text-[10px] text-slate-400">คุมระดับโทนคีย์ดนตรีคู่ขนาน</p>
-                </div>
-                <div className="flex items-center bg-slate-950/60 rounded-xl border border-white/10 p-1">
-                  <button onClick={() => adjustValue(instrumentalsPitch, -1, -24, 24, setInstrumentalsPitch)} className="w-6 h-6 text-xs font-bold text-slate-400 bg-white/5 rounded-md cursor-pointer">-</button>
-                  <span className="w-8 text-center text-xs font-mono font-bold text-white">{instrumentalsPitch}</span>
-                  <button onClick={() => adjustValue(instrumentalsPitch, 1, -24, 24, setInstrumentalsPitch)} className="w-6 h-6 text-xs font-bold text-slate-400 bg-white/5 rounded-md cursor-pointer">+</button>
-                </div>
-              </div>
-
-              {/* 🧼 ปุ่มสวิตช์เพิ่มใหม่: ลบเสียงฮัม & จี่ความถี่ต่ำ */}
-              <div className="bg-slate-900/60 p-3.5 rounded-xl border border-white/5 flex items-center justify-between">
-                <div>
-                  <h4 className="text-xs font-bold text-white">Remove Hum & DC Offset</h4>
-                  <p className="text-[10px] text-slate-400">ตัดเสียงฮัมเพลง เสียงจี่ ครางความถี่ต่ำ</p>
-                </div>
-                <button onClick={() => setRemoveHum(!removeHum)} className={`w-10 h-6 flex items-center rounded-full p-1 cursor-pointer transition-all ${removeHum ? 'bg-indigo-600 justify-end' : 'bg-slate-800 justify-start'}`}><span className="bg-white w-4 h-4 rounded-full shadow-md" /></button>
-              </div>
-
-              {/* 🧼 ปุ่มสวิตช์เพิ่มใหม่: ลบเสียงร้องคอรัส/เสียงประสาน */}
-              <div className="bg-slate-900/60 p-3.5 rounded-xl border border-white/5 flex items-center justify-between">
-                <div>
-                  <h4 className="text-xs font-bold text-white">Remove Backing Vocals</h4>
-                  <p className="text-[10px] text-slate-400">สลัดไลน์เสียงคorัส และเสียงร้องประสานทิ้ง</p>
-                </div>
-                <button onClick={() => setRemoveBackingVocals(!removeBackingVocals)} className={`w-10 h-6 flex items-center rounded-full p-1 cursor-pointer transition-all ${removeBackingVocals ? 'bg-indigo-600 justify-end' : 'bg-slate-800 justify-start'}`}><span className="bg-white w-4 h-4 rounded-full shadow-md" /></button>
-              </div>
-
-              <div className="bg-slate-900/60 p-3.5 rounded-xl border border-white/5 flex flex-col justify-center space-y-1.5">
-                <h4 className="text-xs font-bold text-white">Pitch Detection (f0)</h4>
-                <select value={f0Method} onChange={(e) => setF0Method(e.target.value)} className="w-full bg-slate-950 text-xs text-slate-200 border border-white/10 p-2 rounded-lg outline-none cursor-pointer">
-                  <option value="rmvpe">Mangio-RMVPE </option>
-                  <option value="crepe">Crepe </option>
-                </select>
-              </div>
-
-              <div className="bg-slate-900/60 p-3.5 rounded-xl border border-white/5 flex flex-col justify-center space-y-1.5">
-                <h4 className="text-xs font-bold text-white">Output Format</h4>
-                <select value={outputFormat} onChange={(e) => setOutputFormat(e.target.value)} className="w-full bg-slate-950 text-xs text-slate-200 border border-white/10 p-2 rounded-lg outline-none cursor-pointer">
-                  <option value="mp3_320k">mp3 320k (ความละเอียดมัลติมีเดียสูงสุด)</option>
-                  <option value="wav">wav (คลื่นเสียงดิบ Uncompressed)</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="pt-1 text-center">
-              <button onClick={() => setShowAdvanced(!showAdvanced)} className="inline-flex items-center gap-1 text-[10px] font-black tracking-widest text-slate-400 hover:text-indigo-400 bg-white/5 px-4 py-1.5 rounded-full cursor-pointer transition-all">
-                ADVANCED SETTINGS <span className={`transform transition-transform text-xs ${showAdvanced ? 'rotate-180' : ''}`}>^</span>
-              </button>
-            </div>
-
-            {showAdvanced && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-white/5 animate-fadeIn">
-                {/* 🧼 เพิ่มปุ่มควบคุมการเปิดใช้งาน Noise Gate ท้ายกระบวนการแยกเสียง */}
-                <div className="bg-slate-900/40 p-3 rounded-xl border border-white/5 flex items-center justify-between">
-                  <div>
-                    <h4 className="text-xs font-bold text-white">Apply Post-Processing</h4>
-                    <p className="text-[10px] text-slate-400">เปิดระบบ Noise Gate & Spectral Cleanup</p>
-                  </div>
-                  <button onClick={() => setApplyPostProcessing(!applyPostProcessing)} className={`w-10 h-6 flex items-center rounded-full p-1 cursor-pointer transition-all ${applyPostProcessing ? 'bg-indigo-600 justify-end' : 'bg-slate-800 justify-start'}`}><span className="bg-white w-4 h-4 rounded-full shadow-md" /></button>
-                </div>
-
-                {/* 🧼 เพิ่มปุ่มเปิด Aggressive Mode ตัดเสียงเงียบระดับ -60dB อย่างเฉียบขาด เพื่อแก้ปัญหาร้องพร้อมกัน */}
-                <div className="bg-slate-900/40 p-3 rounded-xl border border-white/5 flex items-center justify-between">
-                  <div>
-                    <h4 className="text-xs font-bold text-white">Aggressive Cleanup Mode</h4>
-                    <p className="text-[10px] text-slate-400">บีบ Noise Gate ดุดัน และทำ De-Esser ลดเสียงพร่าแหลม</p>
-                  </div>
-                  <button onClick={() => setAggressiveCleanup(!aggressiveCleanup)} className={`w-10 h-6 flex items-center rounded-full p-1 cursor-pointer transition-all ${aggressiveCleanup ? 'bg-indigo-600 justify-end' : 'bg-slate-800 justify-start'}`}><span className="bg-white w-4 h-4 rounded-full shadow-md" /></button>
-                </div>
-
-                <div className="bg-slate-900/40 p-3 rounded-xl border border-white/5 flex flex-col justify-between space-y-1.5">
-                  <div className="flex justify-between"><span className="text-xs font-bold text-white">Index Ratio</span>
-                    <div className="flex items-center bg-slate-950/60 rounded-md border border-white/10 px-1">
-                      <button onClick={() => adjustValue(indexRatio, -0.01, 0.0, 1.0, setIndexRatio)} className="px-1 text-[10px] text-slate-400">-</button>
-                      <span className="w-8 text-center text-[10px] font-mono font-bold text-white">{indexRatio}</span>
-                      <button onClick={() => adjustValue(indexRatio, 0.01, 0.0, 1.0, setIndexRatio)} className="px-1 text-[10px] text-slate-400">+</button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bg-slate-900/40 p-3 rounded-xl border border-white/5 flex flex-col justify-between space-y-1.5">
-                  <div className="flex justify-between"><span className="text-xs font-bold text-white">Consonant Protection</span>
-                    <div className="flex items-center bg-slate-950/60 rounded-md border border-white/10 px-1">
-                      <button onClick={() => adjustValue(consonantProtection, -0.01, 0.0, 0.5, setConsonantProtection)} className="px-1 text-[10px] text-slate-400">-</button>
-                      <span className="w-8 text-center text-[10px] font-mono font-bold text-white">{consonantProtection}</span>
-                      <button onClick={() => adjustValue(consonantProtection, 0.01, 0.0, 0.5, setConsonantProtection)} className="px-1 text-[10px] text-slate-400">+</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <button 
-            disabled={isLoading || !audioFile || !selectedModel} 
-            onClick={handleOpenFilenameModal} 
-            className="w-full py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-95 text-white rounded-2xl font-bold shadow-xl disabled:opacity-20 transition-all active:scale-[0.99] text-xs tracking-wider uppercase"
+            ⚡ GPU
+          </button>
+          <button
+            onClick={() => handleSaveDevice('mps')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+              activeDevice === 'mps'
+                ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                : 'text-slate-500 hover:text-slate-300'
+            }`}
           >
-            {isLoading ? `กำลังแปลงกระบวนการสัญญาณเสียง... ${progress}%` : "CONVERT VOICE NOW"}
+            🍎 MPS
+          </button>
+          <button
+            onClick={() => handleSaveDevice('cpu')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+              activeDevice === 'cpu'
+                ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                : 'text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            💻 CPU
+          </button>
+        </div>
+      </div>
+
+      {/* Progress Steps */}
+      <div className="flex items-center gap-2 p-4 bg-slate-900/40 rounded-2xl border border-white/5">
+        <StepIndicator num={1} label="โมเดล" done={step1Done} active={!step1Done} />
+        <div className={`flex-1 h-0.5 ${step1Done ? 'bg-emerald-500' : 'bg-slate-800'}`} />
+        <StepIndicator num={2} label="ไฟล์เสียง" done={step2Done} active={step1Done && !step2Done} />
+        <div className={`flex-1 h-0.5 ${step2Done ? 'bg-emerald-500' : 'bg-slate-800'}`} />
+        <StepIndicator num={3} label="ตั้งค่า" done={isLoading || !!outputFile} active={step1Done && step2Done && !isLoading && !outputFile} />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left Column - Main Controls */}
+        <div className="lg:col-span-2 space-y-6">
+          
+          {/* Step 1: Model Selection */}
+          <section className="p-6 bg-slate-900/40 rounded-2xl border border-white/5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <span className="w-6 h-6 bg-indigo-500 rounded-full flex items-center justify-center text-xs font-black">1</span>
+                🧠 เลือกโมเดลเสียง
+              </h2>
+              {step1Done && <span className="text-xs text-emerald-400 font-bold">✓ เลือกแล้ว</span>}
+            </div>
+
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              className="w-full bg-slate-950 text-white rounded-xl p-3 text-sm border border-white/10 focus:border-indigo-500 outline-none cursor-pointer"
+            >
+              <option value="">-- เลือกโมเดล AI --</option>
+              {models.map(m => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+
+            {models.length === 0 && (
+              <p className="text-xs text-amber-400 bg-amber-500/10 p-3 rounded-lg border border-amber-500/20">
+                ⚠️ ยังไม่มีโมเดล — ไปที่หน้า Download เพื่อเพิ่มโมเดล
+              </p>
+            )}
+          </section>
+
+          {/* Step 2: Audio Selection */}
+          <section className="p-6 bg-slate-900/40 rounded-2xl border border-white/5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <span className="w-6 h-6 bg-purple-500 rounded-full flex items-center justify-center text-xs font-black">2</span>
+                🎵 เลือกไฟล์เสียง
+              </h2>
+              {step2Done && <span className="text-xs text-emerald-400 font-bold">✓ เลือกแล้ว</span>}
+            </div>
+
+            <button
+              onClick={handleSelectAudio}
+              className={`w-full p-6 rounded-xl border-2 border-dashed transition-all cursor-pointer ${
+                audioFile
+                  ? 'bg-purple-500/10 border-purple-500/50 hover:border-purple-500'
+                  : 'bg-slate-950/50 border-slate-700 hover:border-purple-500/50'
+              }`}
+            >
+              {audioFile ? (
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">🎵</span>
+                  <div className="flex-1 min-w-0 text-left">
+                    <p className="text-sm font-bold text-white truncate">{audioFile.name}</p>
+                    <p className="text-[10px] text-slate-400">คลิกเพื่อเปลี่ยนไฟล์</p>
+                  </div>
+                  <span className="text-emerald-400 text-lg">✓</span>
+                </div>
+              ) : (
+                <div className="text-center">
+                  <div className="text-3xl mb-2">📂</div>
+                  <p className="text-sm text-slate-300">คลิกเพื่อเลือกไฟล์เสียงร้อง</p>
+                  <p className="text-[10px] text-slate-500 mt-1">รองรับ MP3, WAV, FLAC</p>
+                </div>
+              )}
+            </button>
+
+            {/* Audio Preview */}
+            {audioFile && (
+              <div className="p-3 bg-slate-950/50 rounded-xl border border-white/5">
+                <audio src={audioFile.path} controls className="w-full h-10 accent-purple-500" />
+              </div>
+            )}
+          </section>
+
+          {/* Step 3: Settings */}
+          <section className="p-6 bg-slate-900/40 rounded-2xl border border-white/5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <span className="w-6 h-6 bg-emerald-500 rounded-full flex items-center justify-center text-xs font-black">3</span>
+                ⚙️ ตั้งค่า
+              </h2>
+            </div>
+
+            {/* Pitch Control */}
+            <div className="space-y-2">
+              <div className="flex justify-between items-center">
+                <label className="text-sm font-bold text-white">🎼 ระดับเสียง (Pitch)</label>
+                <span className="px-3 py-1 bg-indigo-500/20 text-indigo-300 font-mono text-xs rounded-full font-bold">
+                  {pitch > 0 ? `+${pitch}` : pitch === 0 ? '0' : pitch} SEMI
+                </span>
+              </div>
+              <input
+                type="range"
+                min="-12"
+                max="12"
+                value={pitch}
+                onChange={(e) => setPitch(parseInt(e.target.value))}
+                className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+              />
+              <div className="flex justify-between text-[10px] text-slate-500">
+                <span>-12 (ต่ำ)</span>
+                <span>0 (เดิม)</span>
+                <span>+12 (สูง)</span>
+              </div>
+            </div>
+
+            {/* Quick Settings Grid */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-400">รูปแบบ Output</label>
+                <select
+                  value={outputFormat}
+                  onChange={(e) => setOutputFormat(e.target.value)}
+                  className="w-full bg-slate-950 text-xs text-white border border-white/10 p-2.5 rounded-lg outline-none cursor-pointer"
+                >
+                  <option value="mp3_320k">MP3 320k (แนะนำ)</option>
+                  <option value="mp3_192k">MP3 192k</option>
+                  <option value="wav">WAV (Lossless)</option>
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-400">วิธีตรวจจับ Pitch</label>
+                <select
+                  value={f0Method}
+                  onChange={(e) => setF0Method(e.target.value)}
+                  className="w-full bg-slate-950 text-xs text-white border border-white/10 p-2.5 rounded-lg outline-none cursor-pointer"
+                >
+                  <option value="rmvpe">RMVPE (แนะนำ)</option>
+                  <option value="crepe">Crepe</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Advanced Settings Toggle */}
+            <button
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className="w-full py-2.5 bg-slate-950/50 hover:bg-slate-950 border border-white/5 rounded-xl text-xs font-bold text-slate-400 hover:text-white transition-all flex items-center justify-center gap-2 cursor-pointer"
+            >
+              การตั้งค่าขั้นสูง
+              <span className={`transform transition-transform ${showAdvanced ? 'rotate-180' : ''}`}>▼</span>
+            </button>
+
+            {/* Advanced Settings */}
+            {showAdvanced && (
+              <div className="space-y-4 pt-4 border-t border-white/5 animate-fadeIn">
+                {/* Audio Cleanup Section */}
+                <div className="space-y-2">
+                  <p className="text-xs font-bold text-amber-400 uppercase">🧹 Audio Cleanup</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <ToggleSwitch
+                      label="ลดเสียงฮัม"
+                      desc="ตัด DC Offset"
+                      checked={removeHum}
+                      onChange={() => setRemoveHum(!removeHum)}
+                    />
+                    <ToggleSwitch
+                      label="ลบ Backing Vocals"
+                      desc="ตัดเสียงประสาน"
+                      checked={removeBackingVocals}
+                      onChange={() => setRemoveBackingVocals(!removeBackingVocals)}
+                    />
+                    <ToggleSwitch
+                      label="De-Echo & Reverb"
+                      desc="ลดเสียงก้อง"
+                      checked={deEchoDeReverb}
+                      onChange={() => setDeEchoDeReverb(!deEchoDeReverb)}
+                    />
+                    <ToggleSwitch
+                      label="Post-Processing"
+                      desc="Noise Gate"
+                      checked={applyPostProcessing}
+                      onChange={() => setApplyPostProcessing(!applyPostProcessing)}
+                    />
+                  </div>
+                </div>
+
+                {/* Fine-tuning Section */}
+                <div className="space-y-3">
+                  <p className="text-xs font-bold text-slate-400 uppercase">🎛️ Fine-tuning</p>
+                  
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-slate-400">Index Ratio</span>
+                      <span className="font-mono text-white">{indexRatio.toFixed(2)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      value={indexRatio}
+                      onChange={(e) => setIndexRatio(parseFloat(e.target.value))}
+                      className="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-indigo-500"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-slate-400">Consonant Protection</span>
+                      <span className="font-mono text-white">{consonantProtection.toFixed(2)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="0.5"
+                      step="0.01"
+                      value={consonantProtection}
+                      onChange={(e) => setConsonantProtection(parseFloat(e.target.value))}
+                      className="w-full h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-indigo-500"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* Convert Button */}
+          <button
+            onClick={handleOpenFilenameModal}
+            disabled={!canStart}
+            className="w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-95 disabled:opacity-30 disabled:cursor-not-allowed rounded-2xl font-black text-sm uppercase tracking-widest cursor-pointer transition-all active:scale-[0.98] shadow-lg shadow-indigo-500/20"
+          >
+            {isLoading ? `⏳ ${progressMessage} (${progress}%)` : '🚀 เริ่มแปลงเสียง'}
           </button>
 
-          <div className="space-y-4">
-            {outputFile && (
-              <div className="p-4 bg-emerald-950/10 rounded-2xl border border-emerald-500/20 shadow-lg animate-fadeIn">
-                <p className="text-xs font-bold text-emerald-400 uppercase tracking-widest mb-1">✨ Converted AI Vocal Stack Ready</p>
-                <p className="text-[10px] text-slate-500 font-mono mb-2 truncate">Location: {outputFile.name}</p>
-                <div className="bg-slate-900/80 p-4 rounded-2xl border border-white/10 shadow-inner">
-                  <audio src={outputFile.path} controls autoPlay className="w-full h-10 accent-emerald-500 opacity-95" />
+          {/* Progress Bar */}
+          {isLoading && (
+            <div className="space-y-2">
+              <div className="w-full bg-slate-950 rounded-full h-3 overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500 ease-out rounded-full"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+              <p className="text-xs text-slate-400 text-center">{progressMessage}</p>
+            </div>
+          )}
+        </div>
+
+        {/* Right Column - Result */}
+        <div className="lg:col-span-1">
+          <div className="sticky top-4 space-y-4">
+            
+            {/* Info Card */}
+            {!outputFile && !isLoading && (
+              <div className="p-6 bg-slate-900/40 rounded-2xl border border-white/5 space-y-4">
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <span>💡</span> วิธีใช้
+                </h3>
+                <div className="space-y-3 text-xs text-slate-400">
+                  <div className="flex gap-2">
+                    <span className="text-indigo-400 font-bold">1.</span>
+                    <span>เลือกโมเดล AI ที่ต้องการใช้แปลงเสียง</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <span className="text-purple-400 font-bold">2.</span>
+                    <span>เลือกไฟล์เสียงร้องต้นฉบับ (แนะนำ: แยกเสียงดนตรีออกแล้ว)</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <span className="text-emerald-400 font-bold">3.</span>
+                    <span>ปรับ Pitch ถ้าต้องการเปลี่ยนคีย์</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <span className="text-amber-400 font-bold">4.</span>
+                    <span>กดปุ่ม "เริ่มแปลงเสียง" และตั้งชื่อไฟล์</span>
+                  </div>
                 </div>
+              </div>
+            )}
+
+            {/* Loading State */}
+            {isLoading && (
+              <div className="p-6 bg-indigo-950/20 rounded-2xl border border-indigo-500/30 space-y-4">
+                <div className="text-center">
+                  <div className="text-4xl mb-3 animate-bounce">🎵</div>
+                  <p className="text-sm font-bold text-white">กำลังแปลงเสียง...</p>
+                  <p className="text-xs text-slate-400 mt-1">กรุณารอสักครู่</p>
+                </div>
+                <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500"
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+                <p className="text-center text-xs text-slate-400">{progress}%</p>
+              </div>
+            )}
+
+            {/* Result */}
+            {outputFile && (
+              <div className="p-6 bg-emerald-950/20 rounded-2xl border border-emerald-500/30 space-y-4 animate-fadeIn">
+                <div className="text-center">
+                  <div className="text-4xl mb-2">✨</div>
+                  <p className="text-sm font-bold text-emerald-400 uppercase">สำเร็จ!</p>
+                  <p className="text-xs text-slate-400 mt-1 truncate" title={outputFile.name}>
+                    {outputFile.name}
+                  </p>
+                </div>
+                <div className="p-3 bg-slate-950/50 rounded-xl border border-white/5">
+                  <audio src={outputFile.path} controls autoPlay className="w-full h-10 accent-emerald-500" />
+                </div>
+                <button
+                  onClick={() => {
+                    setOutputFile(null);
+                    setAudioFile(null);
+                    setProgress(0);
+                  }}
+                  className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold cursor-pointer transition-all"
+                >
+                  🔄 แปลงไฟล์ใหม่
+                </button>
               </div>
             )}
           </div>
         </div>
       </div>
 
+      {/* Filename Modal */}
       {showFilenameModal && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-fadeIn">
-          <div className="bg-slate-900 border border-white/10 p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-6">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-white/10 p-6 rounded-2xl max-w-md w-full shadow-2xl space-y-5">
             <div className="text-center">
-              <h2 className="text-xl font-black text-white uppercase tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
-                ตั้งชื่อไฟล์ผลลัพธ์
-              </h2>
-              <p className="text-slate-400 text-xs mt-1">กรุณาระบุชื่อไฟล์เสียง RVC AI Cover ตามที่คุณต้องการ</p>
+              <h2 className="text-xl font-black text-white">ตั้งชื่อไฟล์</h2>
+              <p className="text-slate-400 text-xs mt-1">ตั้งชื่อไฟล์ผลลัพธ์ AI Cover</p>
             </div>
-            
+
             <div className="space-y-2">
-              <label className="block text-[10px] font-bold text-indigo-400 uppercase tracking-widest">File Name Output</label>
-              <div className="relative flex items-center bg-slate-950 rounded-xl border border-white/10 focus-within:border-indigo-500 transition-all p-1">
-                <input 
-                  type="text" 
-                  className="w-full bg-transparent text-white rounded-xl p-2.5 text-sm outline-none font-medium placeholder-slate-600 focus:ring-0"
-                  placeholder="ระบุชื่อไฟล์ที่ต้องการ..."
+              <label className="block text-[10px] font-bold text-indigo-400 uppercase">ชื่อไฟล์</label>
+              <div className="relative flex items-center bg-slate-950 rounded-xl border border-white/10 focus-within:border-indigo-500 p-1">
+                <input
+                  type="text"
+                  autoFocus
+                  className="w-full bg-transparent text-white rounded-xl p-2.5 text-sm outline-none"
+                  placeholder="ระบุชื่อไฟล์..."
                   value={customFilename}
                   onChange={(e) => setCustomFilename(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleRunInference()}
                 />
-                <span className="text-xs font-mono font-bold text-slate-500 pr-3 select-none">
+                <span className="text-xs font-mono font-bold text-slate-500 pr-3">
                   .{outputFormat === 'wav' ? 'wav' : 'mp3'}
                 </span>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 pt-2">
-              <button 
+            <div className="grid grid-cols-2 gap-3">
+              <button
                 onClick={() => setShowFilenameModal(false)}
-                className="py-3 bg-slate-800 hover:bg-slate-700/80 text-slate-300 font-bold rounded-xl text-xs uppercase tracking-wider transition-all cursor-pointer"
+                className="py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs uppercase cursor-pointer transition-all"
               >
                 ยกเลิก
               </button>
-              <button 
+              <button
                 onClick={handleRunInference}
                 disabled={!customFilename.trim()}
-                className="py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-95 disabled:opacity-20 text-white font-bold rounded-xl text-xs uppercase tracking-wider shadow-lg transition-all cursor-pointer"
+                className="py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:opacity-95 disabled:opacity-30 text-white font-bold rounded-xl text-xs uppercase cursor-pointer transition-all"
               >
-                เริ่มแปลงเสียง
+                🚀 เริ่มแปลง
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {showWizard && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-900 border border-white/10 p-6 rounded-3xl max-w-md w-full shadow-2xl space-y-6 text-center">
-            <h2 className="text-xl font-black text-white uppercase">Hardware Configuration</h2>
-            <div className="grid grid-cols-1 gap-3 text-left">
-              <div onClick={() => setWizardSelection('cuda')} className={`p-4 rounded-xl border cursor-pointer ${wizardSelection === 'cuda' ? 'bg-indigo-600/20 border-indigo-500' : 'bg-slate-950/40 border-white/5'}`}><span className="text-sm font-bold text-white block">⚡ NVIDIA GPU (CUDA MODE)</span></div>
-              <div onClick={() => setWizardSelection('cpu')} className={`p-4 rounded-xl border cursor-pointer ${wizardSelection === 'cpu' ? 'bg-amber-600/20 border-amber-500' : 'bg-slate-950/40 border-white/5'}`}><span className="text-sm font-bold text-white block">💻 CPU RENDER MODE</span></div>
-            </div>
-            <button onClick={handleSaveHardware} className="w-full py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold rounded-xl text-sm">SAVE SETTING</button>
           </div>
         </div>
       )}
     </div>
   );
-};
+}
 
-export default HomePage;
+// Step Indicator Component
+const StepIndicator = ({ num, label, done, active }: { num: number; label: string; done: boolean; active: boolean }) => (
+  <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full transition-all ${
+    done ? 'bg-emerald-500/20 text-emerald-400' :
+    active ? 'bg-white/10 text-white' : 'bg-slate-800/50 text-slate-500'
+  }`}>
+    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black ${
+      done ? 'bg-emerald-500 text-white' : active ? 'bg-white text-slate-900' : 'bg-slate-700 text-slate-500'
+    }`}>
+      {done ? '✓' : num}
+    </span>
+    <span className="text-[11px] font-bold hidden sm:inline">{label}</span>
+  </div>
+);
+
+// Toggle Switch Component
+const ToggleSwitch = ({ label, desc, checked, onChange }: { label: string; desc: string; checked: boolean; onChange: () => void }) => (
+  <div className="flex items-center justify-between p-2.5 bg-slate-950/50 rounded-lg border border-white/5">
+    <div>
+      <p className="text-[11px] font-bold text-white">{label}</p>
+      <p className="text-[9px] text-slate-500">{desc}</p>
+    </div>
+    <button
+      onClick={onChange}
+      className={`w-9 h-5 flex items-center rounded-full p-0.5 cursor-pointer transition-all ${
+        checked ? 'bg-indigo-600 justify-end' : 'bg-slate-800 justify-start'
+      }`}
+    >
+      <span className="bg-white w-4 h-4 rounded-full shadow-md" />
+    </button>
+  </div>
+);

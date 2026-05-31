@@ -14,8 +14,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 
-	// ⚠️ เปลี่ยนเป็นชื่อโมดูลให้ตรงตามไฟล์ go.mod ของคุณนะครับ
-	"GG-replay/initialization" 
+	"GG-replay/initialization"
 )
 
 //go:embed all:frontend/dist
@@ -37,14 +36,14 @@ func main() {
 	pythonDir := findPythonDir()
 
 	initialization.Logger.Println("================================================")
-	initialization.Logger.Println("=== Starting GG-Replay Go Orchestration Server =")
+	initialization.Logger.Println("=== Starting GG-Replay Go Orchestration Server ===")
 	initialization.Logger.Println("================================================")
 	initialization.Logger.Printf("[Bootstrap] Platform Host OS Runtime: %s", runtime.GOOS)
 	initialization.Logger.Printf("[Bootstrap] Executing Python Target Core: %s", pythonPath)
 
 	// 2. ตรวจสอบฮาร์ดแวร์และการ์ดจอ (CUDA / MPS)
 	deviceInfo := DetectDevices(pythonPath)
-	
+
 	// 3. เริ่มต้นระบบจัดการคิวงานเบื้องหลัง
 	queue := NewJobQueue(workers, pythonPath, pythonDir, deviceInfo)
 
@@ -75,19 +74,19 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 15, G: 23, B: 42, A: 1}, 
-		
+		BackgroundColour: &options.RGBA{R: 15, G: 23, B: 42, A: 1},
+
 		// เมื่อหน้าต่าง UI โหลดเสร็จสิ้น
 		OnStartup: func(ctx context.Context) {
 			initialization.Logger.Println("[Wails Runtime] App window UI loaded completely.")
 			app.startup(ctx)
 		},
-		
+
 		// เมื่อผู้ใช้งานกดปิดแอปพลิเคชัน
 		OnShutdown: func(ctx context.Context) {
 			initialization.Logger.Println("[Wails Runtime] Shutdown trigger activated by user window close.")
 			app.shutdown(ctx)
-			
+
 			// สั่งปิด HTTP Server แบบนุ่มนวล
 			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer shutdownCancel()
@@ -97,9 +96,9 @@ func main() {
 
 			// ปิดเธรดคิวงานทั้งหมด
 			queueCancel()
-			
+
 			// ล้างไฟล์ Temp และโปรเซส Python ตกค้างทั้งหมดออก
-			initialization.Cleanup(nil) 
+			initialization.Cleanup(nil)
 		},
 		Bind: []interface{}{
 			app,
