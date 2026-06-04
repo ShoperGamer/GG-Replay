@@ -31,7 +31,7 @@ julius==0.2.7
 demucs>=4.0.0
 
 # RVC & F0 Extraction
-torchcrepe==0.0.21
+torchcrepe==0.0.24
 faiss-cpu==1.7.4
 fairseq==0.12.2
 
